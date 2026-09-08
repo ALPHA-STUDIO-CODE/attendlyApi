@@ -7,6 +7,47 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Models are added incrementally starting in Phase B (B1: User & auth models).
-// This file intentionally has no models yet — Step A3 only wires up the
-// connection, not the schema.
+// Models are added incrementally per the build blueprint. This step (B1)
+// adds User and its directly-related auth models only. Event/Category/
+// Registration/Report arrive in later steps (B2-B4), at which point the
+// corresponding relation fields are added back onto User.
+
+model User {
+  id           String       @id @default(uuid())
+  email        String       @unique
+  passwordHash String? // null if OAuth-only
+  name         String
+  role         Role         @default(USER)
+  authProvider AuthProvider @default(LOCAL)
+  providerId   String?
+  status       UserStatus   @default(ACTIVE)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  refreshTokens RefreshToken[]
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+  GITHUB
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  tokenHash String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
