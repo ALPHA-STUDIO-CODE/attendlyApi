@@ -1,0 +1,12 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Models are added incrementally starting in Phase B (B1: User & auth models).
+// This file intentionally has no models yet — Step A3 only wires up the
+// connection, not the schema.

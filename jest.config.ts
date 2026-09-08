@@ -5,6 +5,8 @@ const config: Config = {
   testEnvironment: "node",
   rootDir: ".",
   testMatch: ["<rootDir>/test/**/*.test.ts"],
+  globalSetup: "<rootDir>/test/globalSetup.ts",
+  globalTeardown: "<rootDir>/test/globalTeardown.ts",
   clearMocks: true,
   verbose: true,
 };
