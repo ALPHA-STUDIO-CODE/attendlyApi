@@ -58,3 +58,37 @@ model Category {
   name   String  @unique
   events Event[]
 }
+
+model Event {
+  id             String      @id @default(uuid())
+  organizerId    String
+  organizer      User        @relation("OrganizerEvents", fields: [organizerId], references: [id])
+  title          String
+  description    String
+  categoryId     String
+  category       Category    @relation(fields: [categoryId], references: [id])
+  customTags     String[]
+  bannerImageUrl String?
+  venueName      String
+  address        String
+  city           String
+  timezone       String // IANA tz, e.g. "America/New_York"
+  date           DateTime // stored UTC
+  startTime      DateTime
+  endTime        DateTime
+  maxCapacity    Int
+  status         EventStatus @default(PUBLISHED)
+  isLocked       Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([city])
+  @@index([categoryId])
+  @@index([date])
+}
+
+enum EventStatus {
+  PUBLISHED
+  CANCELLED
+  FLAGGED
+}
