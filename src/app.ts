@@ -6,7 +6,7 @@ export function createApp(): Express {
   app.use(express.json());
 
   app.get("/health", (_req, res) => {
-    res.status(200).json({ status: "ok" });
+    res.send("<h1>Attendly API is up and running</h1>");
   });
 
   return app;

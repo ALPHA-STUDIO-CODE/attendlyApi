@@ -7,10 +7,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Models are added incrementally per the build blueprint (B1: User/auth,
-// B2: Category, B3: Event — current). Registration/Report/ReminderConfig
-// arrive in B4, at which point their relation fields are added back onto
-// Event and User.
+// Phase B (data model) is now complete: User/auth (B1), Category (B2),
+// Event (B3), Registration/Report/ReminderConfig (B4 — current). Matches
+// spec §4 in full. Auth endpoints and business logic build on this
+// starting in Phase C.
 
 model User {
   id           String       @id @default(uuid())
@@ -26,6 +26,8 @@ model User {
 
   refreshTokens RefreshToken[]
   events        Event[]        @relation("OrganizerEvents")
+  registrations Registration[]
+  reports       Report[]
 }
 
 enum Role {
@@ -79,8 +81,13 @@ model Event {
   maxCapacity    Int
   status         EventStatus @default(PUBLISHED)
   isLocked       Boolean     @default(false)
+  deletedAt      DateTime? // admin soft-delete (Phase L), distinct from organizer CANCELLED status
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
+
+  registrations   Registration[]
+  reports         Report[]
+  reminderConfigs ReminderConfig[]
 
   @@index([city])
   @@index([categoryId])
@@ -91,4 +98,53 @@ enum EventStatus {
   PUBLISHED
   CANCELLED
   FLAGGED
+}
+
+model Registration {
+  id               String             @id @default(uuid())
+  eventId          String
+  event            Event              @relation(fields: [eventId], references: [id])
+  userId           String
+  user             User               @relation(fields: [userId], references: [id])
+  status           RegistrationStatus @default(REGISTERED)
+  ticketToken      String             @unique // signed token encoded in QR
+  checkedInAt      DateTime?
+  waitlistPosition Int?
+  createdAt        DateTime           @default(now())
+
+  @@unique([eventId, userId]) // prevents duplicate registration
+  @@index([eventId, status])
+}
+
+enum RegistrationStatus {
+  REGISTERED
+  WAITLISTED
+  CANCELLED
+}
+
+// checked-in tracked via checkedInAt being non-null, keeps status simpler
+
+model Report {
+  id         String       @id @default(uuid())
+  eventId    String
+  event      Event        @relation(fields: [eventId], references: [id])
+  reporterId String
+  reporter   User         @relation(fields: [reporterId], references: [id])
+  reason     String
+  status     ReportStatus @default(OPEN)
+  createdAt  DateTime     @default(now())
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWED
+  DISMISSED
+}
+
+model ReminderConfig {
+  id          String  @id @default(uuid())
+  eventId     String
+  event       Event   @relation(fields: [eventId], references: [id])
+  hoursBefore Int
+  sent        Boolean @default(false)
 }
