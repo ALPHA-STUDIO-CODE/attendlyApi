@@ -7,10 +7,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Models are added incrementally per the build blueprint. This step (B1)
-// adds User and its directly-related auth models only. Event/Category/
-// Registration/Report arrive in later steps (B2-B4), at which point the
-// corresponding relation fields are added back onto User.
+// Models are added incrementally per the build blueprint (B1: User/auth,
+// B2: Category, B3: Event — current). Registration/Report/ReminderConfig
+// arrive in B4, at which point their relation fields are added back onto
+// Event and User.
 
 model User {
   id           String       @id @default(uuid())
@@ -25,6 +25,7 @@ model User {
   updatedAt    DateTime     @updatedAt
 
   refreshTokens RefreshToken[]
+  events        Event[]        @relation("OrganizerEvents")
 }
 
 enum Role {
@@ -50,4 +51,10 @@ model RefreshToken {
   tokenHash String
   expiresAt DateTime
   createdAt DateTime @default(now())
+}
+
+model Category {
+  id     String  @id @default(uuid())
+  name   String  @unique
+  events Event[]
 }

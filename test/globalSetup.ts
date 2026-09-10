@@ -17,7 +17,9 @@ export default async function globalSetup(): Promise<void> {
   process.env.DATABASE_URL = testDatabaseUrl;
 
   const migrationsDir = join(__dirname, "..", "prisma", "migrations");
-  const hasMigrations = existsSync(migrationsDir) && readdirSync(migrationsDir).length > 0;
+  const hasMigrations =
+    existsSync(migrationsDir) &&
+    readdirSync(migrationsDir, { withFileTypes: true }).some((entry) => entry.isDirectory());
 
   if (!hasMigrations) {
     // No migrations exist yet (schema.prisma has no models — see Phase B).
@@ -40,4 +42,11 @@ export default async function globalSetup(): Promise<void> {
         String(error),
     );
   }
+
+  // Seed fixed reference data (e.g. Categories) so tests can rely on it
+  // existing without each test file re-seeding it individually. Imported
+  // dynamically, after DATABASE_URL is confirmed set, so its own
+  // PrismaClient connects to the test database.
+  const { seedCategories } = await import("../prisma/seed");
+  await seedCategories();
 }
