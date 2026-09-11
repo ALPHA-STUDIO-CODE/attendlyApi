@@ -1,10 +1,14 @@
 import type { Config } from "jest";
 
+// Integration tests: hit the real (test) database via globalSetup/teardown.
+// Deliberately non-recursive (`test/*.test.ts`, not `test/**`) so it never
+// picks up test/unit/ — those run instantly, without a DB reset, via
+// jest.unit.config.ts instead.
 const config: Config = {
   preset: "ts-jest",
   testEnvironment: "node",
   rootDir: ".",
-  testMatch: ["<rootDir>/test/**/*.test.ts"],
+  testMatch: ["<rootDir>/test/*.test.ts"],
   globalSetup: "<rootDir>/test/globalSetup.ts",
   globalTeardown: "<rootDir>/test/globalTeardown.ts",
   clearMocks: true,
