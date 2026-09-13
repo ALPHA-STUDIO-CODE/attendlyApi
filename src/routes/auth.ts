@@ -1,8 +1,17 @@
 import bcrypt from "bcrypt";
-import { Router } from "express";
+import { Router, Response } from "express";
 import { prisma } from "../db/prisma";
 import { hashPassword, verifyPassword } from "../auth/password";
 import { signAccessToken } from "../auth/jwt";
+import {
+  issueRefreshToken,
+  rotateRefreshToken,
+  deleteRefreshToken,
+  getRefreshCookieOptions,
+  REFRESH_TOKEN_COOKIE_NAME,
+  RefreshTokenReuseError,
+  InvalidRefreshTokenError,
+} from "../auth/refreshToken";
 import { registerSchema, loginSchema } from "../validation/authSchemas";
 import { AppError, ValidationError, ConflictError, AuthError } from "../errors";
 import type { User } from "@prisma/client";
@@ -40,6 +49,10 @@ function toPublicUser(user: User) {
   };
 }
 
+function setRefreshCookie(res: Response, rawToken: string): void {
+  res.cookie(REFRESH_TOKEN_COOKIE_NAME, rawToken, getRefreshCookieOptions());
+}
+
 authRouter.post("/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -58,6 +71,8 @@ authRouter.post("/register", async (req, res) => {
   const user = await prisma.user.create({ data: { email, passwordHash, name } });
 
   const accessToken = signAccessToken({ sub: user.id, role: user.role });
+  const refreshToken = await issueRefreshToken(user.id);
+  setRefreshCookie(res, refreshToken);
   res.status(201).json({ user: toPublicUser(user), accessToken });
 });
 
@@ -85,5 +100,55 @@ authRouter.post("/login", async (req, res) => {
   }
 
   const accessToken = signAccessToken({ sub: user.id, role: user.role });
+  const refreshToken = await issueRefreshToken(user.id);
+  setRefreshCookie(res, refreshToken);
   res.status(200).json({ user: toPublicUser(user), accessToken });
+});
+
+authRouter.post("/refresh", async (req, res) => {
+  const presentedToken = req.cookies?.[REFRESH_TOKEN_COOKIE_NAME];
+  if (!presentedToken) {
+    throw new AuthError("No refresh token provided.", undefined, "MISSING_REFRESH_TOKEN");
+  }
+
+  try {
+    const { userId, newRawToken } = await rotateRefreshToken(presentedToken);
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      // The user was deleted after the token was issued — treat like any
+      // other invalid token rather than a distinct case.
+      throw new InvalidRefreshTokenError();
+    }
+
+    const accessToken = signAccessToken({ sub: user.id, role: user.role });
+    setRefreshCookie(res, newRawToken);
+    res.status(200).json({ accessToken });
+  } catch (err) {
+    if (err instanceof RefreshTokenReuseError) {
+      // Reuse of an already-rotated token: every session for this user has
+      // just been revoked (inside rotateRefreshToken). Clear the cookie
+      // that triggered it and force re-login, per spec §9.
+      res.clearCookie(REFRESH_TOKEN_COOKIE_NAME, getRefreshCookieOptions());
+      throw new AuthError(
+        "This session is no longer valid. Please log in again.",
+        undefined,
+        "REFRESH_TOKEN_REUSE_DETECTED",
+      );
+    }
+    if (err instanceof InvalidRefreshTokenError) {
+      res.clearCookie(REFRESH_TOKEN_COOKIE_NAME, getRefreshCookieOptions());
+      throw new AuthError("Invalid or expired refresh token.", undefined, "INVALID_REFRESH_TOKEN");
+    }
+    throw err;
+  }
+});
+
+authRouter.post("/logout", async (req, res) => {
+  const presentedToken = req.cookies?.[REFRESH_TOKEN_COOKIE_NAME];
+  if (presentedToken) {
+    await deleteRefreshToken(presentedToken);
+  }
+  res.clearCookie(REFRESH_TOKEN_COOKIE_NAME, getRefreshCookieOptions());
+  res.status(200).json({ success: true });
 });
