@@ -14,3 +14,14 @@ export const loginSchema = z.object({
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;
+
+// .strict() rejects any key besides `name` outright (400, with the
+// offending field named in the error) rather than silently ignoring
+// attempts to set e.g. `role` or `status` through this endpoint.
+export const updateMeSchema = z
+  .object({
+    name: z.string().min(1, "Name is required.").optional(),
+  })
+  .strict();
+
+export type UpdateMeInput = z.infer<typeof updateMeSchema>;

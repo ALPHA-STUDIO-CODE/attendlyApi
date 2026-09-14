@@ -12,9 +12,10 @@ import {
   RefreshTokenReuseError,
   InvalidRefreshTokenError,
 } from "../auth/refreshToken";
-import { registerSchema, loginSchema } from "../validation/authSchemas";
+import { registerSchema, loginSchema, updateMeSchema } from "../validation/authSchemas";
 import { AppError, ValidationError, ConflictError, AuthError } from "../errors";
-import type { User } from "@prisma/client";
+import { requireAuth } from "../middleware/requireAuth";
+import { toPublicUser } from "../auth/publicUser";
 
 export const authRouter = Router();
 
@@ -34,19 +35,6 @@ function zodIssuesToFields(
     }
   }
   return fields;
-}
-
-function toPublicUser(user: User) {
-  return {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-    authProvider: user.authProvider,
-    status: user.status,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
-  };
 }
 
 function setRefreshCookie(res: Response, rawToken: string): void {
@@ -151,4 +139,29 @@ authRouter.post("/logout", async (req, res) => {
   }
   res.clearCookie(REFRESH_TOKEN_COOKIE_NAME, getRefreshCookieOptions());
   res.status(200).json({ success: true });
+});
+
+authRouter.get("/me", requireAuth, async (req, res) => {
+  // requireAuth guarantees req.user is set; the user row itself could in
+  // principle have been deleted since the token was issued.
+  const user = await prisma.user.findUnique({ where: { id: req.user!.sub } });
+  if (!user) {
+    throw new AuthError("User account no longer exists.", undefined, "USER_NOT_FOUND");
+  }
+  res.status(200).json({ user: toPublicUser(user) });
+});
+
+authRouter.patch("/me", requireAuth, async (req, res) => {
+  const parsed = updateMeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new ValidationError("Invalid profile update.", {
+      fields: zodIssuesToFields(parsed.error.issues),
+    });
+  }
+
+  const user = await prisma.user.update({
+    where: { id: req.user!.sub },
+    data: parsed.data, // .strict() schema guarantees only `name` can appear here
+  });
+  res.status(200).json({ user: toPublicUser(user) });
 });
