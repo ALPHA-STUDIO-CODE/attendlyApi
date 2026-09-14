@@ -25,3 +25,11 @@ export const updateMeSchema = z
   .strict();
 
 export type UpdateMeInput = z.infer<typeof updateMeSchema>;
+
+// Shared shape for both /oauth/google and /oauth/github (spec §6): a
+// single authorization code, nothing else.
+export const oauthCodeSchema = z.object({
+  code: z.string().min(1, "Authorization code is required."),
+});
+
+export type OAuthCodeInput = z.infer<typeof oauthCodeSchema>;
