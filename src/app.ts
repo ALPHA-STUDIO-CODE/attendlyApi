@@ -1,4 +1,5 @@
 import express, { Express } from "express";
+import cookieParser from "cookie-parser";
 import { requestIdMiddleware } from "./middleware/requestId";
 import { errorMiddleware } from "./middleware/errorHandler";
 import { authRouter } from "./routes/auth";
@@ -7,6 +8,7 @@ export function createApp(): Express {
   const app = express();
 
   app.use(express.json());
+  app.use(cookieParser());
   app.use(requestIdMiddleware);
 
   app.get("/health", (_req, res) => {

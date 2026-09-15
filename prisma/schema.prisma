@@ -47,12 +47,18 @@ enum UserStatus {
 }
 
 model RefreshToken {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  tokenHash String
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String    @unique
   expiresAt DateTime
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+  revokedAt DateTime? // set on rotation (old token) or reuse-triggered mass revocation.
+  // Logout, by contrast, hard-deletes the row (see C4) rather than setting
+  // this — there's no reuse-detection value in keeping a logged-out token
+  // around, unlike a rotated one.
+
+  @@index([userId, revokedAt])
 }
 
 model Category {
