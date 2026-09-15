@@ -22,6 +22,7 @@ import { AppError, ValidationError, ConflictError, AuthError } from "../errors";
 import { requireAuth } from "../middleware/requireAuth";
 import { toPublicUser } from "../auth/publicUser";
 import { exchangeGoogleAuthCode } from "../auth/oauth/google";
+import { exchangeGitHubAuthCode } from "../auth/oauth/github";
 import { findOrCreateOAuthUser } from "../auth/oauthUser";
 
 export const authRouter = Router();
@@ -167,6 +168,29 @@ authRouter.post("/oauth/google", async (req, res) => {
   }
 
   const user = await findOrCreateOAuthUser(profile, "GOOGLE");
+
+  const accessToken = signAccessToken({ sub: user.id, role: user.role });
+  const refreshToken = await issueRefreshToken(user.id);
+  setRefreshCookie(res, refreshToken);
+  res.status(200).json({ user: toPublicUser(user), accessToken });
+});
+
+authRouter.post("/oauth/github", async (req, res) => {
+  const parsed = oauthCodeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new ValidationError("Missing or invalid authorization code.", {
+      fields: zodIssuesToFields(parsed.error.issues),
+    });
+  }
+
+  let profile;
+  try {
+    profile = await exchangeGitHubAuthCode(parsed.data.code);
+  } catch {
+    throw new AuthError("Failed to authenticate with GitHub.", undefined, "OAUTH_EXCHANGE_FAILED");
+  }
+
+  const user = await findOrCreateOAuthUser(profile, "GITHUB");
 
   const accessToken = signAccessToken({ sub: user.id, role: user.role });
   const refreshToken = await issueRefreshToken(user.id);
