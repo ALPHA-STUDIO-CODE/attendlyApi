@@ -1,5 +1,5 @@
-import { randomBytes, createHash } from "crypto";
 import { prisma } from "../db/prisma";
+import { generateOpaqueToken, hashOpaqueToken } from "./tokenUtils";
 
 // 7-30 days per spec §5; 30 is chosen for a generous "stay logged in"
 // experience — rotation on every refresh keeps the security cost of the
@@ -20,28 +20,17 @@ export function getRefreshCookieOptions() {
   };
 }
 
-function generateRawToken(): string {
-  // 512 bits of entropy — brute-forcing this is infeasible, which is why
-  // (per spec §5) a fast hash like SHA-256 is sufficient for at-rest
-  // storage here, unlike a user-chosen password.
-  return randomBytes(64).toString("hex");
-}
-
-function hashToken(rawToken: string): string {
-  return createHash("sha256").update(rawToken).digest("hex");
-}
-
 /**
  * Creates a new refresh token row for a user and returns the raw
  * (unhashed) token to set on the response cookie. Only the hash is
  * persisted.
  */
 export async function issueRefreshToken(userId: string): Promise<string> {
-  const rawToken = generateRawToken();
+  const rawToken = generateOpaqueToken();
   await prisma.refreshToken.create({
     data: {
       userId,
-      tokenHash: hashToken(rawToken),
+      tokenHash: hashOpaqueToken(rawToken),
       expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
     },
   });
@@ -71,7 +60,7 @@ export class InvalidRefreshTokenError extends Error {
 export async function rotateRefreshToken(
   rawToken: string,
 ): Promise<{ userId: string; newRawToken: string }> {
-  const tokenHash = hashToken(rawToken);
+  const tokenHash = hashOpaqueToken(rawToken);
   const existing = await prisma.refreshToken.findUnique({ where: { tokenHash } });
 
   if (!existing) {
@@ -87,7 +76,7 @@ export async function rotateRefreshToken(
     throw new InvalidRefreshTokenError();
   }
 
-  const newRawToken = generateRawToken();
+  const newRawToken = generateOpaqueToken();
   await prisma.$transaction([
     prisma.refreshToken.update({
       where: { id: existing.id },
@@ -96,7 +85,7 @@ export async function rotateRefreshToken(
     prisma.refreshToken.create({
       data: {
         userId: existing.userId,
-        tokenHash: hashToken(newRawToken),
+        tokenHash: hashOpaqueToken(newRawToken),
         expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
       },
     }),
@@ -118,6 +107,6 @@ export async function revokeAllUserRefreshTokens(userId: string): Promise<void> 
  * keeping a deliberately-logged-out token around.
  */
 export async function deleteRefreshToken(rawToken: string): Promise<void> {
-  const tokenHash = hashToken(rawToken);
+  const tokenHash = hashOpaqueToken(rawToken);
   await prisma.refreshToken.deleteMany({ where: { tokenHash } });
 }

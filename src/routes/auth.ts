@@ -17,6 +17,8 @@ import {
   loginSchema,
   updateMeSchema,
   oauthCodeSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
 } from "../validation/authSchemas";
 import { AppError, ValidationError, ConflictError, AuthError } from "../errors";
 import { requireAuth } from "../middleware/requireAuth";
@@ -24,6 +26,8 @@ import { toPublicUser } from "../auth/publicUser";
 import { exchangeGoogleAuthCode } from "../auth/oauth/google";
 import { exchangeGitHubAuthCode } from "../auth/oauth/github";
 import { findOrCreateOAuthUser } from "../auth/oauthUser";
+import { generateOpaqueToken, hashOpaqueToken } from "../auth/tokenUtils";
+import { sendPasswordResetEmail } from "../email/sendPasswordResetEmail";
 
 export const authRouter = Router();
 
@@ -146,6 +150,69 @@ authRouter.post("/logout", async (req, res) => {
     await deleteRefreshToken(presentedToken);
   }
   res.clearCookie(REFRESH_TOKEN_COOKIE_NAME, getRefreshCookieOptions());
+  res.status(200).json({ success: true });
+});
+
+const PASSWORD_RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour, per spec
+
+authRouter.post("/forgot-password", async (req, res) => {
+  const parsed = forgotPasswordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new ValidationError("Invalid email address.", {
+      fields: zodIssuesToFields(parsed.error.issues),
+    });
+  }
+
+  const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
+
+  // Always 200, whether or not the email exists — a differing response
+  // here would let an attacker enumerate registered emails via this
+  // endpoint alone, with no credentials required at all.
+  if (user) {
+    const rawToken = generateOpaqueToken();
+    await prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: hashOpaqueToken(rawToken),
+        expiresAt: new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS),
+      },
+    });
+    await sendPasswordResetEmail(user, rawToken);
+  }
+
+  res.status(200).json({ success: true });
+});
+
+authRouter.post("/reset-password", async (req, res) => {
+  const parsed = resetPasswordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new ValidationError("Invalid reset request.", {
+      fields: zodIssuesToFields(parsed.error.issues),
+    });
+  }
+  const { token, password } = parsed.data;
+
+  const tokenRow = await prisma.passwordResetToken.findUnique({
+    where: { tokenHash: hashOpaqueToken(token) },
+  });
+
+  // One generic error for "never existed," "already used," and "expired"
+  // alike — matches the same reasoning as requireAuth's unified
+  // TOKEN_EXPIRED code (spec §9): don't give an attacker probing tokens
+  // any information about *why* a guess failed.
+  if (!tokenRow || tokenRow.usedAt || tokenRow.expiresAt <= new Date()) {
+    throw new AuthError("Invalid or expired reset token.", undefined, "INVALID_RESET_TOKEN");
+  }
+
+  const passwordHash = await hashPassword(password);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: tokenRow.userId }, data: { passwordHash } }),
+    prisma.passwordResetToken.update({
+      where: { id: tokenRow.id },
+      data: { usedAt: new Date() },
+    }),
+  ]);
+
   res.status(200).json({ success: true });
 });
 

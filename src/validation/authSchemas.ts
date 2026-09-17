@@ -33,3 +33,16 @@ export const oauthCodeSchema = z.object({
 });
 
 export type OAuthCodeInput = z.infer<typeof oauthCodeSchema>;
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email("Must be a valid email address."),
+});
+
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1, "Reset token is required."),
+  password: z.string().min(8, "Password must be at least 8 characters."),
+});
+
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
