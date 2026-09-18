@@ -30,6 +30,15 @@ export class AuthError extends AppError {
   }
 }
 
+// Distinct from AuthError (401 — "we don't know who you are" / bad or
+// missing credentials): this is "we know who you are, but you're not
+// allowed to do this" — wrong role, or not the resource's owner.
+export class ForbiddenError extends AppError {
+  constructor(message: string, details?: unknown, code = "FORBIDDEN") {
+    super(403, code, message, details);
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(message: string, details?: unknown, code = "NOT_FOUND") {
     super(404, code, message, details);

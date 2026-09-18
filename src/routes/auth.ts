@@ -20,7 +20,7 @@ import {
   forgotPasswordSchema,
   resetPasswordSchema,
 } from "../validation/authSchemas";
-import { AppError, ValidationError, ConflictError, AuthError } from "../errors";
+import { ValidationError, ConflictError, AuthError, ForbiddenError } from "../errors";
 import { requireAuth } from "../middleware/requireAuth";
 import { toPublicUser } from "../auth/publicUser";
 import { exchangeGoogleAuthCode } from "../auth/oauth/google";
@@ -96,7 +96,7 @@ authRouter.post("/login", async (req, res) => {
   // status before proving the caller knows the password would let an
   // attacker enumerate suspended accounts without valid credentials.
   if (user.status === "SUSPENDED") {
-    throw new AppError(403, "ACCOUNT_SUSPENDED", "Your account has been suspended.");
+    throw new ForbiddenError("Your account has been suspended.", undefined, "ACCOUNT_SUSPENDED");
   }
 
   const accessToken = signAccessToken({ sub: user.id, role: user.role });
