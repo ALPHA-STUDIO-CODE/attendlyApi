@@ -24,10 +24,11 @@ model User {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
-  refreshTokens RefreshToken[]
-  events        Event[]        @relation("OrganizerEvents")
-  registrations Registration[]
-  reports       Report[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  events              Event[]        @relation("OrganizerEvents")
+  registrations       Registration[]
+  reports             Report[]
 }
 
 enum Role {
@@ -59,6 +60,23 @@ model RefreshToken {
   // around, unlike a rotated one.
 
   @@index([userId, revokedAt])
+}
+
+// Not in spec §4's original schema — a necessary addition flagged back
+// in the build blueprint (Step D3), since the password-reset flow in
+// §6/§7 can't work without somewhere to store the reset token's hash.
+// Same pattern as RefreshToken: opaque random token, SHA-256 hashed at
+// rest, single-use via `usedAt`.
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
 model Category {

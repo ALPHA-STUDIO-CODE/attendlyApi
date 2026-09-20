@@ -1,7 +1,3 @@
-// Base class for all errors that should be turned into a structured
-// { error: { code, message, details } } response by errorMiddleware,
-// rather than a generic 500. Anything NOT extending AppError is treated
-// as unexpected and gets a generic message with no details leaked.
 export class AppError extends Error {
   readonly statusCode: number;
   readonly code: string;
@@ -12,8 +8,6 @@ export class AppError extends Error {
     this.statusCode = statusCode;
     this.code = code;
     this.details = details;
-    // Required for `instanceof` to work correctly when extending built-ins
-    // like Error under some TS/target combinations.
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -24,9 +18,21 @@ export class ValidationError extends AppError {
   }
 }
 
+export class UnprocessableEntityError extends AppError {
+  constructor(message: string, details?: unknown, code = "UNPROCESSABLE_ENTITY") {
+    super(422, code, message, details);
+  }
+}
+
 export class AuthError extends AppError {
   constructor(message: string, details?: unknown, code = "AUTH_ERROR") {
     super(401, code, message, details);
+  }
+}
+
+export class ForbiddenError extends AppError {
+  constructor(message: string, details?: unknown, code = "FORBIDDEN") {
+    super(403, code, message, details);
   }
 }
 
