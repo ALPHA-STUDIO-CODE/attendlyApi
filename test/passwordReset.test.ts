@@ -63,7 +63,7 @@ describe("POST /api/auth/reset-password", () => {
 
     const response = await request(app)
       .post("/api/auth/reset-password")
-      .send({ token: rawToken, password: "brand-new-password-456" });
+      .send({ token: rawToken, newPassword: "brand-new-password-456" });
     expect(response.status).toBe(200);
 
     const updatedUser = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
@@ -90,12 +90,12 @@ describe("POST /api/auth/reset-password", () => {
 
     const first = await request(app)
       .post("/api/auth/reset-password")
-      .send({ token: rawToken, password: "first-new-password-1" });
+      .send({ token: rawToken, newPassword: "first-new-password-1" });
     expect(first.status).toBe(200);
 
     const second = await request(app)
       .post("/api/auth/reset-password")
-      .send({ token: rawToken, password: "second-new-password-2" });
+      .send({ token: rawToken, newPassword: "second-new-password-2" });
     expect(second.status).toBe(401);
     expect(second.body.error.code).toBe("INVALID_RESET_TOKEN");
   });
@@ -115,7 +115,7 @@ describe("POST /api/auth/reset-password", () => {
 
     const response = await request(app)
       .post("/api/auth/reset-password")
-      .send({ token: rawToken, password: "does-not-matter-123" });
+      .send({ token: rawToken, newPassword: "does-not-matter-123" });
     expect(response.status).toBe(401);
     expect(response.body.error.code).toBe("INVALID_RESET_TOKEN");
   });
@@ -123,7 +123,7 @@ describe("POST /api/auth/reset-password", () => {
   it("rejects an unrecognized token", async () => {
     const response = await request(app)
       .post("/api/auth/reset-password")
-      .send({ token: "not-a-real-token", password: "does-not-matter-123" });
+      .send({ token: "not-a-real-token", newPassword: "does-not-matter-123" });
     expect(response.status).toBe(401);
     expect(response.body.error.code).toBe("INVALID_RESET_TOKEN");
   });
@@ -131,7 +131,7 @@ describe("POST /api/auth/reset-password", () => {
   it("rejects a password under 8 characters", async () => {
     const response = await request(app)
       .post("/api/auth/reset-password")
-      .send({ token: "whatever", password: "short" });
+      .send({ token: "whatever", newPassword: "short" });
     expect(response.status).toBe(400);
   });
 });

@@ -3,6 +3,8 @@ import cookieParser from "cookie-parser";
 import { requestIdMiddleware } from "./middleware/requestId";
 import { errorMiddleware } from "./middleware/errorHandler";
 import { authRouter } from "./routes/auth";
+import { categoryRouter } from "./routes/categories";
+import { eventRouter } from "./routes/events";
 
 export function createApp(): Express {
   const app = express();
@@ -16,10 +18,9 @@ export function createApp(): Express {
   });
 
   app.use("/api/auth", authRouter);
+  app.use("/api/categories", categoryRouter);
+  app.use("/api/events", eventRouter);
 
-  // Must be mounted last — Express recognizes error middleware by its
-  // 4-argument signature and only invokes it when next(err) is called or
-  // an async handler rejects (Express 5 auto-forwards async rejections).
   app.use(errorMiddleware);
 
   return app;

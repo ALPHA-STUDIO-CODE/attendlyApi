@@ -21,6 +21,7 @@ import {
   resetPasswordSchema,
 } from "../validation/authSchemas";
 import { ValidationError, ConflictError, AuthError, ForbiddenError } from "../errors";
+import { zodIssuesToFields } from "../validation/zodHelpers";
 import { requireAuth } from "../middleware/requireAuth";
 import { toPublicUser } from "../auth/publicUser";
 import { exchangeGoogleAuthCode } from "../auth/oauth/google";
@@ -35,19 +36,6 @@ export const authRouter = Router();
 // constant whether or not the email exists, so bcrypt.compare's ~500ms
 // cost can't be used as a timing oracle to enumerate registered emails.
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync("dummy-password-for-timing-safety", 12);
-
-function zodIssuesToFields(
-  issues: { path: PropertyKey[]; message: string }[],
-): Record<string, string> {
-  const fields: Record<string, string> = {};
-  for (const issue of issues) {
-    const key = issue.path.length > 0 ? issue.path.map(String).join(".") : "_root";
-    if (!(key in fields)) {
-      fields[key] = issue.message;
-    }
-  }
-  return fields;
-}
 
 function setRefreshCookie(res: Response, rawToken: string): void {
   res.cookie(REFRESH_TOKEN_COOKIE_NAME, rawToken, getRefreshCookieOptions());
@@ -190,21 +178,17 @@ authRouter.post("/reset-password", async (req, res) => {
       fields: zodIssuesToFields(parsed.error.issues),
     });
   }
-  const { token, password } = parsed.data;
+  const { token, newPassword } = parsed.data;
 
   const tokenRow = await prisma.passwordResetToken.findUnique({
     where: { tokenHash: hashOpaqueToken(token) },
   });
 
-  // One generic error for "never existed," "already used," and "expired"
-  // alike — matches the same reasoning as requireAuth's unified
-  // TOKEN_EXPIRED code (spec §9): don't give an attacker probing tokens
-  // any information about *why* a guess failed.
   if (!tokenRow || tokenRow.usedAt || tokenRow.expiresAt <= new Date()) {
     throw new AuthError("Invalid or expired reset token.", undefined, "INVALID_RESET_TOKEN");
   }
 
-  const passwordHash = await hashPassword(password);
+  const passwordHash = await hashPassword(newPassword);
   await prisma.$transaction([
     prisma.user.update({ where: { id: tokenRow.userId }, data: { passwordHash } }),
     prisma.passwordResetToken.update({
@@ -228,9 +212,6 @@ authRouter.post("/oauth/google", async (req, res) => {
   try {
     profile = await exchangeGoogleAuthCode(parsed.data.code);
   } catch {
-    // Deliberately don't surface the underlying reason (network failure vs.
-    // Google rejecting the code vs. malformed response) — none of that is
-    // actionable for the client beyond "OAuth didn't work, try again."
     throw new AuthError("Failed to authenticate with Google.", undefined, "OAUTH_EXCHANGE_FAILED");
   }
 
@@ -266,8 +247,6 @@ authRouter.post("/oauth/github", async (req, res) => {
 });
 
 authRouter.get("/me", requireAuth, async (req, res) => {
-  // requireAuth guarantees req.user is set; the user row itself could in
-  // principle have been deleted since the token was issued.
   const user = await prisma.user.findUnique({ where: { id: req.user!.sub } });
   if (!user) {
     throw new AuthError("User account no longer exists.", undefined, "USER_NOT_FOUND");
@@ -285,7 +264,7 @@ authRouter.patch("/me", requireAuth, async (req, res) => {
 
   const user = await prisma.user.update({
     where: { id: req.user!.sub },
-    data: parsed.data, // .strict() schema guarantees only `name` can appear here
+    data: parsed.data,
   });
   res.status(200).json({ user: toPublicUser(user) });
 });
