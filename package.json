@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/src/server.js",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "start": "prisma migrate deploy && node dist/src/server.js",
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "npm run test:unit && npm run test:integration",
@@ -21,6 +21,7 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "pino": "^10.3.1",
+    "prisma": "6.19.3",
     "zod": "^4.6.2"
   },
   "devDependencies": {
