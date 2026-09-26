@@ -4,6 +4,7 @@ import {
   AuthError,
   NotFoundError,
   ConflictError,
+  BadGatewayError,
 } from "../../src/errors";
 
 describe("AppError subclasses", () => {
@@ -37,5 +38,18 @@ describe("AppError subclasses", () => {
     const err = new ConflictError("Email already registered", undefined, "EMAIL_TAKEN");
     expect(err.statusCode).toBe(409);
     expect(err.code).toBe("EMAIL_TAKEN");
+  });
+
+  it("BadGatewayError carries status 502 and code BAD_GATEWAY by default", () => {
+    const err = new BadGatewayError("Upstream failed");
+    expect(err).toBeInstanceOf(AppError);
+    expect(err.statusCode).toBe(502);
+    expect(err.code).toBe("BAD_GATEWAY");
+  });
+
+  it("BadGatewayError allows a specific code such as UPLOAD_FAILED", () => {
+    const err = new BadGatewayError("Upload failed", undefined, "UPLOAD_FAILED");
+    expect(err.statusCode).toBe(502);
+    expect(err.code).toBe("UPLOAD_FAILED");
   });
 });

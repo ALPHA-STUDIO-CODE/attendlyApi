@@ -10,8 +10,18 @@ import { getEventSemanticErrors } from "../business/eventSemantics";
 import { getRejectedLockedFields } from "../business/fieldLock";
 import { parsePagination } from "../business/pagination";
 import { buildEventWhereClause } from "../business/eventFilters";
+import { detectImageType } from "../business/imageType";
 import { queueCancellationEmails } from "../email/queueCancellationEmails";
-import { ValidationError, UnprocessableEntityError, ConflictError, NotFoundError } from "../errors";
+import { uploadBannerImage } from "../integrations/cloudinary";
+import { parseBannerUpload, BANNER_FIELD_NAME } from "../middleware/uploadBanner";
+import { logger } from "../logger";
+import {
+  ValidationError,
+  UnprocessableEntityError,
+  ConflictError,
+  NotFoundError,
+  BadGatewayError,
+} from "../errors";
 
 export const eventRouter = Router();
 
@@ -163,6 +173,51 @@ eventRouter.delete(
     });
 
     await queueCancellationEmails(updated.id);
+
+    res.status(200).json({ event: updated });
+  },
+);
+
+eventRouter.post(
+  "/:id/banner",
+  requireAuth,
+  requireOwnerOrAdmin({ allowAdmin: false }),
+  parseBannerUpload,
+  async (req, res) => {
+    const event = req.event!;
+
+    const file = req.file;
+    if (!file) {
+      throw new ValidationError("Invalid banner upload.", {
+        fields: { [BANNER_FIELD_NAME]: "A banner image file is required." },
+      });
+    }
+
+    if (!detectImageType(file.buffer)) {
+      throw new ValidationError("Invalid banner upload.", {
+        fields: { [BANNER_FIELD_NAME]: "Banner must be a JPEG, PNG, or WebP image." },
+      });
+    }
+
+    let bannerImageUrl: string;
+    try {
+      bannerImageUrl = await uploadBannerImage({ buffer: file.buffer, eventId: event.id });
+    } catch (err) {
+      logger.error(
+        { requestId: req.id, eventId: event.id, err },
+        "Banner upload to Cloudinary failed",
+      );
+      throw new BadGatewayError(
+        "Banner upload failed. Please try again.",
+        undefined,
+        "UPLOAD_FAILED",
+      );
+    }
+
+    const updated = await prisma.event.update({
+      where: { id: event.id },
+      data: { bannerImageUrl },
+    });
 
     res.status(200).json({ event: updated });
   },
