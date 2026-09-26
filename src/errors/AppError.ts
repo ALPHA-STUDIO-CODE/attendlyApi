@@ -47,3 +47,9 @@ export class ConflictError extends AppError {
     super(409, code, message, details);
   }
 }
+
+export class BadGatewayError extends AppError {
+  constructor(message: string, details?: unknown, code = "BAD_GATEWAY") {
+    super(502, code, message, details);
+  }
+}

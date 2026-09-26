@@ -6,4 +6,5 @@ export {
   ForbiddenError,
   NotFoundError,
   ConflictError,
+  BadGatewayError,
 } from "./AppError";
