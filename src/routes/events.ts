@@ -11,7 +11,10 @@ import { getRejectedLockedFields } from "../business/fieldLock";
 import { parsePagination } from "../business/pagination";
 import { buildEventWhereClause } from "../business/eventFilters";
 import { detectImageType } from "../business/imageType";
+import type { Prisma } from "@prisma/client";
+import { registerForEvent } from "../business/registration";
 import { queueCancellationEmails } from "../email/queueCancellationEmails";
+import { queueRegistrationConfirmationEmail } from "../email/queueRegistrationConfirmationEmail";
 import { uploadBannerImage } from "../integrations/cloudinary";
 import { parseBannerUpload, BANNER_FIELD_NAME } from "../middleware/uploadBanner";
 import { logger } from "../logger";
@@ -178,6 +181,8 @@ eventRouter.delete(
   },
 );
 
+// Auth/ownership checks run *before* the upload is parsed, so an
+// unauthorized caller never gets to stream a file at us. Owner-only
 eventRouter.post(
   "/:id/banner",
   requireAuth,
@@ -193,6 +198,8 @@ eventRouter.post(
       });
     }
 
+    // Type comes from the file's own bytes, never from the client-supplied
+    // Content-Type or filename.
     if (!detectImageType(file.buffer)) {
       throw new ValidationError("Invalid banner upload.", {
         fields: { [BANNER_FIELD_NAME]: "Banner must be a JPEG, PNG, or WebP image." },
@@ -203,6 +210,7 @@ eventRouter.post(
     try {
       bannerImageUrl = await uploadBannerImage({ buffer: file.buffer, eventId: event.id });
     } catch (err) {
+      // Full detail goes to the server log only; the client gets a generic,
       logger.error(
         { requestId: req.id, eventId: event.id, err },
         "Banner upload to Cloudinary failed",
@@ -222,3 +230,15 @@ eventRouter.post(
     res.status(200).json({ event: updated });
   },
 );
+
+eventRouter.post("/:id/register", requireAuth, async (req, res) => {
+  const id = requireStringParam(req, "id");
+
+  const registration = await prisma.$transaction((tx: Prisma.TransactionClient) =>
+    registerForEvent(tx, { eventId: id, userId: req.user!.sub }),
+  );
+
+  await queueRegistrationConfirmationEmail(registration.id);
+
+  res.status(201).json({ registration });
+});
