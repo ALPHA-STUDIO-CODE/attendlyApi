@@ -13,6 +13,8 @@ import { buildEventWhereClause } from "../business/eventFilters";
 import { detectImageType } from "../business/imageType";
 import type { Prisma } from "@prisma/client";
 import { registerForEvent } from "../business/registration";
+import { cancelRegistration } from "../business/cancellation";
+import { EVENT_LOCK_TX_OPTIONS } from "../db/transactionOptions";
 import { queueCancellationEmails } from "../email/queueCancellationEmails";
 import { queueRegistrationConfirmationEmail } from "../email/queueRegistrationConfirmationEmail";
 import { uploadBannerImage } from "../integrations/cloudinary";
@@ -234,11 +236,31 @@ eventRouter.post(
 eventRouter.post("/:id/register", requireAuth, async (req, res) => {
   const id = requireStringParam(req, "id");
 
-  const registration = await prisma.$transaction((tx: Prisma.TransactionClient) =>
-    registerForEvent(tx, { eventId: id, userId: req.user!.sub }),
+  const registration = await prisma.$transaction(
+    (tx: Prisma.TransactionClient) => registerForEvent(tx, { eventId: id, userId: req.user!.sub }),
+    EVENT_LOCK_TX_OPTIONS,
   );
 
   await queueRegistrationConfirmationEmail(registration.id);
 
   res.status(201).json({ registration });
+});
+
+eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
+  const id = requireStringParam(req, "id");
+
+  const { cancelled, promoted } = await prisma.$transaction(
+    (tx: Prisma.TransactionClient) =>
+      cancelRegistration(tx, { eventId: id, userId: req.user!.sub }),
+    EVENT_LOCK_TX_OPTIONS,
+  );
+
+  // Queued after the transaction commits, same as registration (I2 swaps in
+  // the real send). The promoted attendee gets the standard confirmation
+  // email, flagged as a waitlist promotion.
+  if (promoted) {
+    await queueRegistrationConfirmationEmail(promoted.id, { promotedFromWaitlist: true });
+  }
+
+  res.status(200).json({ registration: cancelled });
 });

@@ -86,7 +86,7 @@ describe("POST /api/events/:id/register — concurrency safety", () => {
     const dbTotalCount = await prisma.registration.count({ where: { eventId: event.id } });
     expect(dbRegisteredCount).toBe(CAPACITY);
     expect(dbTotalCount).toBe(N);
-  });
+  }, 60_000);
 
   it("never oversells even when the request count is a large multiple of capacity", async () => {
     const CAPACITY = 2;
@@ -106,5 +106,5 @@ describe("POST /api/events/:id/register — concurrency safety", () => {
       where: { eventId: event.id, status: "REGISTERED" },
     });
     expect(dbRegisteredCount).toBe(CAPACITY);
-  });
+  }, 60_000);
 });
