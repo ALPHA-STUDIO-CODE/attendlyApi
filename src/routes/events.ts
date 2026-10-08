@@ -15,6 +15,7 @@ import type { Prisma } from "@prisma/client";
 import { registerForEvent } from "../business/registration";
 import { cancelRegistration } from "../business/cancellation";
 import { EVENT_LOCK_TX_OPTIONS } from "../db/transactionOptions";
+import { ACTIVE_REGISTRATION_STATUSES } from "../business/registrationListing";
 import { queueCancellationEmails } from "../email/queueCancellationEmails";
 import { queueRegistrationConfirmationEmail } from "../email/queueRegistrationConfirmationEmail";
 import { uploadBannerImage } from "../integrations/cloudinary";
@@ -183,8 +184,6 @@ eventRouter.delete(
   },
 );
 
-// Auth/ownership checks run *before* the upload is parsed, so an
-// unauthorized caller never gets to stream a file at us. Owner-only
 eventRouter.post(
   "/:id/banner",
   requireAuth,
@@ -200,8 +199,6 @@ eventRouter.post(
       });
     }
 
-    // Type comes from the file's own bytes, never from the client-supplied
-    // Content-Type or filename.
     if (!detectImageType(file.buffer)) {
       throw new ValidationError("Invalid banner upload.", {
         fields: { [BANNER_FIELD_NAME]: "Banner must be a JPEG, PNG, or WebP image." },
@@ -212,7 +209,6 @@ eventRouter.post(
     try {
       bannerImageUrl = await uploadBannerImage({ buffer: file.buffer, eventId: event.id });
     } catch (err) {
-      // Full detail goes to the server log only; the client gets a generic,
       logger.error(
         { requestId: req.id, eventId: event.id, err },
         "Banner upload to Cloudinary failed",
@@ -255,12 +251,47 @@ eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
     EVENT_LOCK_TX_OPTIONS,
   );
 
-  // Queued after the transaction commits, same as registration (I2 swaps in
-  // the real send). The promoted attendee gets the standard confirmation
-  // email, flagged as a waitlist promotion.
   if (promoted) {
     await queueRegistrationConfirmationEmail(promoted.id, { promotedFromWaitlist: true });
   }
 
   res.status(200).json({ registration: cancelled });
+});
+
+eventRouter.get("/:id/registrations", requireAuth, requireOwnerOrAdmin(), async (req, res) => {
+  const id = requireStringParam(req, "id");
+  const { page, limit } = parsePagination(req.query.page, req.query.limit);
+  const where: Prisma.RegistrationWhereInput = {
+    eventId: id,
+    status: { in: ACTIVE_REGISTRATION_STATUSES },
+  };
+
+  const [registrations, total] = await Promise.all([
+    prisma.registration.findMany({
+      where,
+      skip: (page - 1) * limit,
+      take: limit,
+      orderBy: [
+        { status: "asc" },
+        { waitlistPosition: "asc" },
+        { createdAt: "asc" },
+        { id: "asc" },
+      ],
+      select: {
+        id: true,
+        eventId: true,
+        status: true,
+        waitlistPosition: true,
+        checkedInAt: true,
+        createdAt: true,
+        user: { select: { id: true, name: true, email: true } },
+      },
+    }),
+    prisma.registration.count({ where }),
+  ]);
+
+  res.status(200).json({
+    registrations,
+    pagination: { page, limit, total, totalPages: total === 0 ? 0 : Math.ceil(total / limit) },
+  });
 });

@@ -5,6 +5,7 @@ import { errorMiddleware } from "./middleware/errorHandler";
 import { authRouter } from "./routes/auth";
 import { categoryRouter } from "./routes/categories";
 import { eventRouter } from "./routes/events";
+import { meRouter } from "./routes/me";
 
 export function createApp(): Express {
   const app = express();
@@ -20,6 +21,7 @@ export function createApp(): Express {
   app.use("/api/auth", authRouter);
   app.use("/api/categories", categoryRouter);
   app.use("/api/events", eventRouter);
+  app.use("/api/me", meRouter);
 
   app.use(errorMiddleware);
 
