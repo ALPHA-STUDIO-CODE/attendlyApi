@@ -15,7 +15,11 @@ import type { Prisma } from "@prisma/client";
 import { registerForEvent } from "../business/registration";
 import { cancelRegistration } from "../business/cancellation";
 import { EVENT_LOCK_TX_OPTIONS } from "../db/transactionOptions";
-import { ACTIVE_REGISTRATION_STATUSES } from "../business/registrationListing";
+import {
+  ACTIVE_REGISTRATION_STATUSES,
+  ATTENDEE_LIST_ORDER_BY,
+} from "../business/registrationListing";
+import { buildAttendeesCsvFilename, formatAttendeesCsv } from "../business/csvExport";
 import { queueCancellationEmails } from "../email/queueCancellationEmails";
 import { queueRegistrationConfirmationEmail } from "../email/queueRegistrationConfirmationEmail";
 import { uploadBannerImage } from "../integrations/cloudinary";
@@ -184,6 +188,8 @@ eventRouter.delete(
   },
 );
 
+// Auth/ownership checks run *before* the upload is parsed, so an
+// unauthorized caller never gets to stream a file at us. Owner-only
 eventRouter.post(
   "/:id/banner",
   requireAuth,
@@ -199,6 +205,8 @@ eventRouter.post(
       });
     }
 
+    // Type comes from the file's own bytes, never from the client-supplied
+    // Content-Type or filename.
     if (!detectImageType(file.buffer)) {
       throw new ValidationError("Invalid banner upload.", {
         fields: { [BANNER_FIELD_NAME]: "Banner must be a JPEG, PNG, or WebP image." },
@@ -209,6 +217,7 @@ eventRouter.post(
     try {
       bannerImageUrl = await uploadBannerImage({ buffer: file.buffer, eventId: event.id });
     } catch (err) {
+      // Full detail goes to the server log only; the client gets a generic,
       logger.error(
         { requestId: req.id, eventId: event.id, err },
         "Banner upload to Cloudinary failed",
@@ -251,6 +260,9 @@ eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
     EVENT_LOCK_TX_OPTIONS,
   );
 
+  // Queued after the transaction commits, same as registration (I2 swaps in
+  // the real send). The promoted attendee gets the standard confirmation
+  // email, flagged as a waitlist promotion.
   if (promoted) {
     await queueRegistrationConfirmationEmail(promoted.id, { promotedFromWaitlist: true });
   }
@@ -258,6 +270,10 @@ eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
   res.status(200).json({ registration: cancelled });
 });
 
+// Organizer/admin attendee list: everyone registered or waitlisted, seated
+// attendees first, then the waitlist in queue order. Deliberately omits
+// `ticketToken` (each attendee's QR secret) and any user field beyond what an
+// organizer needs to recognise an attendee.
 eventRouter.get("/:id/registrations", requireAuth, requireOwnerOrAdmin(), async (req, res) => {
   const id = requireStringParam(req, "id");
   const { page, limit } = parsePagination(req.query.page, req.query.limit);
@@ -271,12 +287,7 @@ eventRouter.get("/:id/registrations", requireAuth, requireOwnerOrAdmin(), async 
       where,
       skip: (page - 1) * limit,
       take: limit,
-      orderBy: [
-        { status: "asc" },
-        { waitlistPosition: "asc" },
-        { createdAt: "asc" },
-        { id: "asc" },
-      ],
+      orderBy: ATTENDEE_LIST_ORDER_BY,
       select: {
         id: true,
         eventId: true,
@@ -295,3 +306,49 @@ eventRouter.get("/:id/registrations", requireAuth, requireOwnerOrAdmin(), async 
     pagination: { page, limit, total, totalPages: total === 0 ? 0 : Math.ceil(total / limit) },
   });
 });
+
+// Attendee CSV export (spec §5, H5): same audience and order as the list
+// above, but the whole list in one file, active rows only (no CANCELLED), and
+// never the ticket token. Allowed on cancelled events too — organizers still
+// want the attendee record afterwards.
+eventRouter.get(
+  "/:id/registrations/export",
+  requireAuth,
+  requireOwnerOrAdmin(),
+  async (req, res) => {
+    const event = req.event!;
+
+    const registrations = await prisma.registration.findMany({
+      where: { eventId: event.id, status: { in: ACTIVE_REGISTRATION_STATUSES } },
+      orderBy: ATTENDEE_LIST_ORDER_BY,
+      select: {
+        status: true,
+        waitlistPosition: true,
+        checkedInAt: true,
+        createdAt: true,
+        user: { select: { name: true, email: true } },
+      },
+    });
+
+    const csv = formatAttendeesCsv(
+      registrations.map((registration) => ({
+        name: registration.user.name,
+        email: registration.user.email,
+        status: registration.status,
+        waitlistPosition: registration.waitlistPosition,
+        createdAt: registration.createdAt,
+        checkedInAt: registration.checkedInAt,
+      })),
+    );
+
+    res
+      .status(200)
+      .set({
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${buildAttendeesCsvFilename(event.title, event.id)}"`,
+        // Attendee names and emails: keep shared caches and proxies from storing it.
+        "Cache-Control": "no-store",
+      })
+      .send(csv);
+  },
+);
