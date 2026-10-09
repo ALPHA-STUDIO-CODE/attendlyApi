@@ -172,3 +172,19 @@ model ReminderConfig {
   hoursBefore Int
   sent        Boolean @default(false)
 }
+
+// Dead-letter record for emails that failed to send (spec §8.5). Metadata
+// only: no email body is stored, because password-reset emails contain the
+// raw reset token. A retry re-renders the email from `kind` + `relatedId`.
+model FailedEmail {
+  id           String   @id @default(uuid())
+  kind         String
+  recipient    String
+  subject      String
+  errorMessage String
+  relatedId    String?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([kind, createdAt])
+}
