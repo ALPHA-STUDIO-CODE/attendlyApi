@@ -17,7 +17,7 @@ const config: Config = {
   // Postgres instance (e.g. Supabase) over a connection pooler rather than
   // localhost. Individual slow tests can still override with a third
   // argument to it()/test() if they need more.
-  testTimeout: 15000,
+  testTimeout: 30000,
 };
 
 export default config;
