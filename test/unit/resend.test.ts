@@ -1,5 +1,5 @@
 import { Resend } from "resend";
-import { sendEmail, type SendEmailInput } from "../../src/integrations/resend";
+import { recordEmailFailure, sendEmail, type SendEmailInput } from "../../src/integrations/resend";
 import { prisma } from "../../src/db/prisma";
 import { logger } from "../../src/logger";
 
@@ -235,5 +235,40 @@ describe("sendEmail — configuration", () => {
     });
     expect(mockSend).not.toHaveBeenCalled();
     expect(mockedCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("recordEmailFailure", () => {
+  it("logs and dead-letters an email that was never built, without sending anything", async () => {
+    const result = await recordEmailFailure(
+      {
+        kind: "PASSWORD_RESET",
+        to: "ada@example.com",
+        subject: "(not built) PASSWORD_RESET",
+        relatedId: "user-1",
+      },
+      "APP_BASE_URL is not set",
+    );
+
+    expect(result).toEqual({ ok: false, error: "APP_BASE_URL is not set" });
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockedLoggerError).toHaveBeenCalledTimes(1);
+    expect(mockedCreate).toHaveBeenCalledWith({
+      data: {
+        kind: "PASSWORD_RESET",
+        recipient: "ada@example.com",
+        subject: "(not built) PASSWORD_RESET",
+        errorMessage: "APP_BASE_URL is not set",
+        relatedId: "user-1",
+      },
+    });
+  });
+
+  it("still resolves when the dead-letter write fails", async () => {
+    mockedCreate.mockRejectedValue(new Error("database is down"));
+
+    await expect(
+      recordEmailFailure({ kind: "PASSWORD_RESET", to: "ada@example.com", subject: "s" }, "boom"),
+    ).resolves.toEqual({ ok: false, error: "boom" });
   });
 });

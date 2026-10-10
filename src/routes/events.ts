@@ -182,14 +182,12 @@ eventRouter.delete(
       data: { status: "CANCELLED" },
     });
 
-    await queueCancellationEmails(updated.id);
+    void queueCancellationEmails(updated.id);
 
     res.status(200).json({ event: updated });
   },
 );
 
-// Auth/ownership checks run *before* the upload is parsed, so an
-// unauthorized caller never gets to stream a file at us. Owner-only
 eventRouter.post(
   "/:id/banner",
   requireAuth,
@@ -205,8 +203,6 @@ eventRouter.post(
       });
     }
 
-    // Type comes from the file's own bytes, never from the client-supplied
-    // Content-Type or filename.
     if (!detectImageType(file.buffer)) {
       throw new ValidationError("Invalid banner upload.", {
         fields: { [BANNER_FIELD_NAME]: "Banner must be a JPEG, PNG, or WebP image." },
@@ -217,7 +213,6 @@ eventRouter.post(
     try {
       bannerImageUrl = await uploadBannerImage({ buffer: file.buffer, eventId: event.id });
     } catch (err) {
-      // Full detail goes to the server log only; the client gets a generic,
       logger.error(
         { requestId: req.id, eventId: event.id, err },
         "Banner upload to Cloudinary failed",
@@ -246,9 +241,12 @@ eventRouter.post("/:id/register", requireAuth, async (req, res) => {
     EVENT_LOCK_TX_OPTIONS,
   );
 
-  await queueRegistrationConfirmationEmail(registration.id);
+  const email = await queueRegistrationConfirmationEmail(registration.id);
 
-  res.status(201).json({ registration });
+  res.status(201).json({
+    registration,
+    ...(email.ok ? {} : { warnings: ["confirmation email may be delayed"] }),
+  });
 });
 
 eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
@@ -260,9 +258,6 @@ eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
     EVENT_LOCK_TX_OPTIONS,
   );
 
-  // Queued after the transaction commits, same as registration (I2 swaps in
-  // the real send). The promoted attendee gets the standard confirmation
-  // email, flagged as a waitlist promotion.
   if (promoted) {
     await queueRegistrationConfirmationEmail(promoted.id, { promotedFromWaitlist: true });
   }
@@ -270,10 +265,6 @@ eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
   res.status(200).json({ registration: cancelled });
 });
 
-// Organizer/admin attendee list: everyone registered or waitlisted, seated
-// attendees first, then the waitlist in queue order. Deliberately omits
-// `ticketToken` (each attendee's QR secret) and any user field beyond what an
-// organizer needs to recognise an attendee.
 eventRouter.get("/:id/registrations", requireAuth, requireOwnerOrAdmin(), async (req, res) => {
   const id = requireStringParam(req, "id");
   const { page, limit } = parsePagination(req.query.page, req.query.limit);
@@ -307,10 +298,6 @@ eventRouter.get("/:id/registrations", requireAuth, requireOwnerOrAdmin(), async 
   });
 });
 
-// Attendee CSV export (spec §5, H5): same audience and order as the list
-// above, but the whole list in one file, active rows only (no CANCELLED), and
-// never the ticket token. Allowed on cancelled events too — organizers still
-// want the attendee record afterwards.
 eventRouter.get(
   "/:id/registrations/export",
   requireAuth,
@@ -346,7 +333,6 @@ eventRouter.get(
       .set({
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="${buildAttendeesCsvFilename(event.title, event.id)}"`,
-        // Attendee names and emails: keep shared caches and proxies from storing it.
         "Cache-Control": "no-store",
       })
       .send(csv);

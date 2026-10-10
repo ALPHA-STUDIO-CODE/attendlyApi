@@ -32,9 +32,6 @@ import { sendPasswordResetEmail } from "../email/sendPasswordResetEmail";
 
 export const authRouter = Router();
 
-// Precomputed once at module load. Used to keep login's response time
-// constant whether or not the email exists, so bcrypt.compare's ~500ms
-// cost can't be used as a timing oracle to enumerate registered emails.
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync("dummy-password-for-timing-safety", 12);
 
 function setRefreshCookie(res: Response, rawToken: string): void {
@@ -80,9 +77,6 @@ authRouter.post("/login", async (req, res) => {
     throw new AuthError("Invalid email or password.", undefined, "INVALID_CREDENTIALS");
   }
 
-  // Checked after credential verification, deliberately: revealing account
-  // status before proving the caller knows the password would let an
-  // attacker enumerate suspended accounts without valid credentials.
   if (user.status === "SUSPENDED") {
     throw new ForbiddenError("Your account has been suspended.", undefined, "ACCOUNT_SUSPENDED");
   }
@@ -104,8 +98,6 @@ authRouter.post("/refresh", async (req, res) => {
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      // The user was deleted after the token was issued — treat like any
-      // other invalid token rather than a distinct case.
       throw new InvalidRefreshTokenError();
     }
 
@@ -114,9 +106,6 @@ authRouter.post("/refresh", async (req, res) => {
     res.status(200).json({ accessToken });
   } catch (err) {
     if (err instanceof RefreshTokenReuseError) {
-      // Reuse of an already-rotated token: every session for this user has
-      // just been revoked (inside rotateRefreshToken). Clear the cookie
-      // that triggered it and force re-login, per spec §9.
       res.clearCookie(REFRESH_TOKEN_COOKIE_NAME, getRefreshCookieOptions());
       throw new AuthError(
         "This session is no longer valid. Please log in again.",
@@ -153,9 +142,6 @@ authRouter.post("/forgot-password", async (req, res) => {
 
   const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
 
-  // Always 200, whether or not the email exists — a differing response
-  // here would let an attacker enumerate registered emails via this
-  // endpoint alone, with no credentials required at all.
   if (user) {
     const rawToken = generateOpaqueToken();
     await prisma.passwordResetToken.create({
@@ -165,7 +151,7 @@ authRouter.post("/forgot-password", async (req, res) => {
         expiresAt: new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS),
       },
     });
-    await sendPasswordResetEmail(user, rawToken);
+    void sendPasswordResetEmail(user, rawToken);
   }
 
   res.status(200).json({ success: true });

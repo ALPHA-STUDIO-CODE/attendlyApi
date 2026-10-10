@@ -11,6 +11,7 @@ const config: Config = {
   testMatch: ["<rootDir>/test/*.test.ts"],
   globalSetup: "<rootDir>/test/globalSetup.ts",
   globalTeardown: "<rootDir>/test/globalTeardown.ts",
+  setupFiles: ["<rootDir>/test/setupEnv.ts"],
   clearMocks: true,
   verbose: true,
   // Default (5000ms) is tight for integration tests hitting a hosted
