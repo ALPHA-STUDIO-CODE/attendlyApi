@@ -9,6 +9,8 @@ import { zodIssuesToFields } from "../validation/zodHelpers";
 import { getEventSemanticErrors } from "../business/eventSemantics";
 import { getRejectedLockedFields } from "../business/fieldLock";
 import { parsePagination } from "../business/pagination";
+import { checkInAttendee, getCheckInStats } from "../business/checkin";
+import { checkInSchema } from "../validation/checkinSchemas";
 import { buildEventWhereClause } from "../business/eventFilters";
 import { detectImageType } from "../business/imageType";
 import type { Prisma } from "@prisma/client";
@@ -296,6 +298,39 @@ eventRouter.get("/:id/registrations", requireAuth, requireOwnerOrAdmin(), async 
     registrations,
     pagination: { page, limit, total, totalPages: total === 0 ? 0 : Math.ceil(total / limit) },
   });
+});
+
+eventRouter.post("/:id/checkin", requireAuth, requireOwnerOrAdmin(), async (req, res) => {
+  const event = req.event!;
+
+  const parsed = checkInSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new ValidationError("Invalid check-in request.", {
+      fields: zodIssuesToFields(parsed.error.issues),
+    });
+  }
+
+  const result = await checkInAttendee(prisma, {
+    event,
+    ticketToken: parsed.data.ticketToken,
+    scannedBy: req.user!.sub,
+  });
+
+  logger.info(
+    { eventId: event.id, registrationId: result.registrationId, checkedInBy: req.user!.sub },
+    "Attendee checked in",
+  );
+
+  res.status(200).json({
+    registration: { id: result.registrationId, checkedInAt: result.checkedInAt },
+    attendee: { name: result.attendeeName },
+  });
+});
+
+eventRouter.get("/:id/checkin-stats", requireAuth, requireOwnerOrAdmin(), async (req, res) => {
+  const stats = await getCheckInStats(prisma, req.event!);
+
+  res.status(200).json({ stats });
 });
 
 eventRouter.get(
