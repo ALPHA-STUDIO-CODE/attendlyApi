@@ -1,5 +1,10 @@
 import { buildAppUrl } from "./appUrl";
 
+// Email content (spec §7.3, §7.5, §8): plain functions returning
+// { subject, html, text }, so they are pure, unit-testable and need no
+// templating dependency. Every user-supplied value (names, event titles,
+// addresses) is HTML-escaped in the HTML part; the text part is plain text.
+
 export interface EmailContent {
   subject: string;
   html: string;
@@ -26,11 +31,14 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/** Collapses line breaks so user text can't inject extra header lines. */
 function oneLine(value: string): string {
   return value.replace(/[\r\n\t]+/g, " ").trim();
 }
 
 function formatInZone(date: Date, timeZone: string, options: Intl.DateTimeFormatOptions): string {
+  // U+202F (narrow no-break space) before AM/PM, emitted by newer ICU
+  // versions, renders oddly in some mail clients: use a plain space.
   return new Intl.DateTimeFormat("en-US", { ...options, timeZone })
     .format(date)
     .replace(/\u202f/g, " ");
@@ -48,6 +56,12 @@ const TIME: Intl.DateTimeFormatOptions = {
   timeZoneName: "short",
 };
 
+/**
+ * "Saturday, November 7, 2026, 6:00 PM EST – 9:00 PM EST", in the event's own
+ * timezone (spec: Event.timezone drives display). An end on a later local day
+ * repeats the date. An unknown timezone falls back to UTC rather than
+ * failing the email.
+ */
 export function formatEventWhen(
   event: Pick<EmailEvent, "startTime" | "endTime" | "timezone">,
 ): string {
@@ -65,6 +79,15 @@ export function formatEventWhen(
   }
 }
 
+/** "Saturday, November 7, 2026" — the event's start day in its own timezone. */
+export function formatEventDay(event: Pick<EmailEvent, "startTime" | "timezone">): string {
+  try {
+    return formatInZone(event.startTime, event.timezone, DAY);
+  } catch {
+    return formatInZone(event.startTime, "UTC", DAY);
+  }
+}
+
 function formatEventWhere(event: Pick<EmailEvent, "venueName" | "address" | "city">): string {
   return `${event.venueName}, ${event.address}, ${event.city}`;
 }
@@ -75,6 +98,7 @@ function eventUrl(event: Pick<EmailEvent, "id">): string {
 
 interface Layout {
   heading: string;
+  /** Already-escaped HTML paragraphs. */
   paragraphsHtml: string[];
   cta?: { label: string; url: string };
 }
@@ -100,6 +124,35 @@ function eventDetailsHtml(event: EmailEvent): string {
 
 function eventDetailsText(event: EmailEvent): string {
   return `When: ${formatEventWhen(event)}\nWhere: ${formatEventWhere(event)}`;
+}
+
+/**
+ * Reminder (spec §7.5). Deliberately says when the event is, never "in N
+ * hours": a reminder can go out later than configured (after a restart, or
+ * for a reminder added late), and a relative time would then be wrong.
+ */
+export function eventReminderEmail(data: { userName: string; event: EmailEvent }): EmailContent {
+  const { event } = data;
+  const name = oneLine(data.userName);
+  const url = eventUrl(event);
+  return {
+    subject: oneLine(`Reminder: ${event.title} on ${formatEventDay(event)}`),
+    html: renderHtml({
+      heading: "Event reminder",
+      paragraphsHtml: [
+        `Hi ${escapeHtml(name)}, a reminder that <strong>${escapeHtml(event.title)}</strong> is coming up.`,
+        eventDetailsHtml(event),
+      ],
+      cta: { label: "View event", url },
+    }),
+    text: [
+      `Hi ${name}, a reminder that ${event.title} is coming up.`,
+      "",
+      eventDetailsText(event),
+      "",
+      `View event: ${url}`,
+    ].join("\n"),
+  };
 }
 
 export function registrationConfirmationEmail(data: {

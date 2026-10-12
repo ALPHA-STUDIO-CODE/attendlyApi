@@ -2,6 +2,8 @@ import { buildAppUrl } from "../../src/email/appUrl";
 import {
   escapeHtml,
   eventCancellationEmail,
+  eventReminderEmail,
+  formatEventDay,
   formatEventWhen,
   passwordResetEmail,
   registrationConfirmationEmail,
@@ -244,5 +246,58 @@ describe("buildAppUrl", () => {
     process.env.NODE_ENV = "production";
 
     expect(buildAppUrl("/events/1")).toBe("https://attendly.example.test/events/1");
+  });
+});
+
+describe("formatEventDay", () => {
+  it("gives the start day in the event's own timezone", () => {
+    expect(formatEventDay(EVENT)).toBe("Saturday, November 7, 2026");
+  });
+
+  it("can land on a different calendar day in another timezone", () => {
+    // 23:00Z on the 7th is already midday on the 8th in New Zealand.
+    expect(formatEventDay({ ...EVENT, timezone: "Pacific/Auckland" })).toBe(
+      "Sunday, November 8, 2026",
+    );
+  });
+
+  it("falls back to UTC for an unknown timezone instead of throwing", () => {
+    expect(formatEventDay({ ...EVENT, timezone: "Not/A_Zone" })).toBe("Saturday, November 7, 2026");
+  });
+});
+
+describe("eventReminderEmail", () => {
+  it("names the event and its day in the subject", () => {
+    const email = eventReminderEmail({ userName: "Ada Lovelace", event: EVENT });
+
+    expect(email.subject).toBe("Reminder: Tech Meetup on Saturday, November 7, 2026");
+  });
+
+  it("gives when, where and a link, and greets the user by name", () => {
+    const email = eventReminderEmail({ userName: "Ada Lovelace", event: EVENT });
+
+    expect(email.text).toContain("Hi Ada Lovelace, a reminder that Tech Meetup is coming up.");
+    expect(email.text).toContain("When: Saturday, November 7, 2026, 6:00 PM EST");
+    expect(email.text).toContain("Where: Test Hall, 123 Test St, Testville");
+    expect(email.html).toContain('href="https://attendly.example.test/events/evt-1"');
+  });
+
+  it("never says how many hours away the event is (a reminder can go out late)", () => {
+    const email = eventReminderEmail({ userName: "Ada", event: EVENT });
+
+    expect(email.text).not.toMatch(/\bhours?\b/);
+    expect(email.html).not.toMatch(/\bhours?\b/);
+  });
+
+  it("escapes user-supplied values in the HTML and keeps the subject on one line", () => {
+    const email = eventReminderEmail({
+      userName: "<b>Mallory</b>",
+      event: { ...EVENT, title: "Tom & <Jerry>\r\nBcc: evil@example.com" },
+    });
+
+    expect(email.html).toContain("&lt;b&gt;Mallory&lt;/b&gt;");
+    expect(email.html).toContain("Tom &amp; &lt;Jerry&gt;");
+    expect(email.html).not.toContain("<Jerry>");
+    expect(email.subject).not.toMatch(/[\r\n]/);
   });
 });

@@ -10,6 +10,7 @@ import { getEventSemanticErrors } from "../business/eventSemantics";
 import { getRejectedLockedFields } from "../business/fieldLock";
 import { parsePagination } from "../business/pagination";
 import { checkInAttendee, getCheckInStats } from "../business/checkin";
+import { REMINDER_CONFIGS_INCLUDE, replaceReminderConfigs } from "../business/reminderConfigs";
 import { checkInSchema } from "../validation/checkinSchemas";
 import { buildEventWhereClause } from "../business/eventFilters";
 import { detectImageType } from "../business/imageType";
@@ -64,7 +65,11 @@ eventRouter.post("/", requireAuth, async (req, res) => {
         startTime: new Date(parsed.data.startTime),
         endTime: new Date(parsed.data.endTime),
         maxCapacity: parsed.data.maxCapacity,
+        reminderConfigs: {
+          create: parsed.data.reminderConfigs.map(({ hoursBefore }) => ({ hoursBefore })),
+        },
       },
+      include: { reminderConfigs: REMINDER_CONFIGS_INCLUDE },
     });
     res.status(201).json({ event });
   } catch (err) {
@@ -113,6 +118,7 @@ eventRouter.get("/:id", async (req, res) => {
     include: {
       category: true,
       organizer: { select: { id: true, name: true } },
+      reminderConfigs: REMINDER_CONFIGS_INCLUDE,
     },
   });
   if (!event) {
@@ -158,14 +164,29 @@ eventRouter.patch(
       throw new UnprocessableEntityError("Invalid event update.", { fields: semanticErrors });
     }
 
-    const updated = await prisma.event.update({
-      where: { id: event.id },
-      data: {
-        ...parsed.data,
-        date: parsed.data.date ? new Date(parsed.data.date) : undefined,
-        startTime: parsed.data.startTime ? new Date(parsed.data.startTime) : undefined,
-        endTime: parsed.data.endTime ? new Date(parsed.data.endTime) : undefined,
-      },
+    // `reminderConfigs` is a relation, handled separately from the event's own
+    // columns. Reminders aren't locked fields: organizers can change them any
+    // time, even once people have registered.
+    const { reminderConfigs, ...eventFields } = parsed.data;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (reminderConfigs !== undefined) {
+        await replaceReminderConfigs(
+          tx,
+          event.id,
+          reminderConfigs.map((config) => config.hoursBefore),
+        );
+      }
+      return tx.event.update({
+        where: { id: event.id },
+        data: {
+          ...eventFields,
+          date: eventFields.date ? new Date(eventFields.date) : undefined,
+          startTime: eventFields.startTime ? new Date(eventFields.startTime) : undefined,
+          endTime: eventFields.endTime ? new Date(eventFields.endTime) : undefined,
+        },
+        include: { reminderConfigs: REMINDER_CONFIGS_INCLUDE },
+      });
     });
 
     res.status(200).json({ event: updated });
@@ -184,12 +205,16 @@ eventRouter.delete(
       data: { status: "CANCELLED" },
     });
 
+    // Background fan-out: the organizer's request doesn't wait for every
+    // attendee's email (it never rejects, so there is nothing to catch).
     void queueCancellationEmails(updated.id);
 
     res.status(200).json({ event: updated });
   },
 );
 
+// Auth/ownership checks run *before* the upload is parsed, so an
+// unauthorized caller never gets to stream a file at us. Owner-only
 eventRouter.post(
   "/:id/banner",
   requireAuth,
@@ -205,6 +230,8 @@ eventRouter.post(
       });
     }
 
+    // Type comes from the file's own bytes, never from the client-supplied
+    // Content-Type or filename.
     if (!detectImageType(file.buffer)) {
       throw new ValidationError("Invalid banner upload.", {
         fields: { [BANNER_FIELD_NAME]: "Banner must be a JPEG, PNG, or WebP image." },
@@ -215,6 +242,7 @@ eventRouter.post(
     try {
       bannerImageUrl = await uploadBannerImage({ buffer: file.buffer, eventId: event.id });
     } catch (err) {
+      // Full detail goes to the server log only; the client gets a generic,
       logger.error(
         { requestId: req.id, eventId: event.id, err },
         "Banner upload to Cloudinary failed",
@@ -245,6 +273,8 @@ eventRouter.post("/:id/register", requireAuth, async (req, res) => {
 
   const email = await queueRegistrationConfirmationEmail(registration.id);
 
+  // Spec §8.5: the registration stands even if its email couldn't be sent;
+  // say so in a non-blocking `warnings` entry (omitted when all went well).
   res.status(201).json({
     registration,
     ...(email.ok ? {} : { warnings: ["confirmation email may be delayed"] }),
@@ -260,6 +290,10 @@ eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
     EVENT_LOCK_TX_OPTIONS,
   );
 
+  // Sent after the transaction commits, same as registration. The promoted
+  // attendee gets the waitlist-promotion email. A failure is dead-lettered
+  // but not reported to the caller: it isn't their email, and the
+  // cancellation itself succeeded.
   if (promoted) {
     await queueRegistrationConfirmationEmail(promoted.id, { promotedFromWaitlist: true });
   }
@@ -267,6 +301,10 @@ eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
   res.status(200).json({ registration: cancelled });
 });
 
+// Organizer/admin attendee list: everyone registered or waitlisted, seated
+// attendees first, then the waitlist in queue order. Deliberately omits
+// `ticketToken` (each attendee's QR secret) and any user field beyond what an
+// organizer needs to recognise an attendee.
 eventRouter.get("/:id/registrations", requireAuth, requireOwnerOrAdmin(), async (req, res) => {
   const id = requireStringParam(req, "id");
   const { page, limit } = parsePagination(req.query.page, req.query.limit);
@@ -300,6 +338,12 @@ eventRouter.get("/:id/registrations", requireAuth, requireOwnerOrAdmin(), async 
   });
 });
 
+// Attendee CSV export (spec §5, H5): same audience and order as the list
+// above, but the whole list in one file, active rows only (no CANCELLED), and
+// never the ticket token. Allowed on cancelled events too — organizers still
+// want the attendee record afterwards.
+// Check-in (spec §7.4): the organizer's (or admin's) in-app scanner posts the
+// ticket token it just read from an attendee's QR code.
 eventRouter.post("/:id/checkin", requireAuth, requireOwnerOrAdmin(), async (req, res) => {
   const event = req.event!;
 
@@ -316,6 +360,7 @@ eventRouter.post("/:id/checkin", requireAuth, requireOwnerOrAdmin(), async (req,
     scannedBy: req.user!.sub,
   });
 
+  // The cheap audit trail: who scanned whom, without a schema change.
   logger.info(
     { eventId: event.id, registrationId: result.registrationId, checkedInBy: req.user!.sub },
     "Attendee checked in",
@@ -368,6 +413,7 @@ eventRouter.get(
       .set({
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="${buildAttendeesCsvFilename(event.title, event.id)}"`,
+        // Attendee names and emails: keep shared caches and proxies from storing it.
         "Cache-Control": "no-store",
       })
       .send(csv);
