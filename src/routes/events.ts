@@ -9,6 +9,9 @@ import { zodIssuesToFields } from "../validation/zodHelpers";
 import { getEventSemanticErrors } from "../business/eventSemantics";
 import { getRejectedLockedFields } from "../business/fieldLock";
 import { parsePagination } from "../business/pagination";
+import { checkInAttendee, getCheckInStats } from "../business/checkin";
+import { REMINDER_CONFIGS_INCLUDE, replaceReminderConfigs } from "../business/reminderConfigs";
+import { checkInSchema } from "../validation/checkinSchemas";
 import { buildEventWhereClause } from "../business/eventFilters";
 import { detectImageType } from "../business/imageType";
 import type { Prisma } from "@prisma/client";
@@ -62,7 +65,11 @@ eventRouter.post("/", requireAuth, async (req, res) => {
         startTime: new Date(parsed.data.startTime),
         endTime: new Date(parsed.data.endTime),
         maxCapacity: parsed.data.maxCapacity,
+        reminderConfigs: {
+          create: parsed.data.reminderConfigs.map(({ hoursBefore }) => ({ hoursBefore })),
+        },
       },
+      include: { reminderConfigs: REMINDER_CONFIGS_INCLUDE },
     });
     res.status(201).json({ event });
   } catch (err) {
@@ -111,6 +118,7 @@ eventRouter.get("/:id", async (req, res) => {
     include: {
       category: true,
       organizer: { select: { id: true, name: true } },
+      reminderConfigs: REMINDER_CONFIGS_INCLUDE,
     },
   });
   if (!event) {
@@ -156,14 +164,29 @@ eventRouter.patch(
       throw new UnprocessableEntityError("Invalid event update.", { fields: semanticErrors });
     }
 
-    const updated = await prisma.event.update({
-      where: { id: event.id },
-      data: {
-        ...parsed.data,
-        date: parsed.data.date ? new Date(parsed.data.date) : undefined,
-        startTime: parsed.data.startTime ? new Date(parsed.data.startTime) : undefined,
-        endTime: parsed.data.endTime ? new Date(parsed.data.endTime) : undefined,
-      },
+    // `reminderConfigs` is a relation, handled separately from the event's own
+    // columns. Reminders aren't locked fields: organizers can change them any
+    // time, even once people have registered.
+    const { reminderConfigs, ...eventFields } = parsed.data;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (reminderConfigs !== undefined) {
+        await replaceReminderConfigs(
+          tx,
+          event.id,
+          reminderConfigs.map((config) => config.hoursBefore),
+        );
+      }
+      return tx.event.update({
+        where: { id: event.id },
+        data: {
+          ...eventFields,
+          date: eventFields.date ? new Date(eventFields.date) : undefined,
+          startTime: eventFields.startTime ? new Date(eventFields.startTime) : undefined,
+          endTime: eventFields.endTime ? new Date(eventFields.endTime) : undefined,
+        },
+        include: { reminderConfigs: REMINDER_CONFIGS_INCLUDE },
+      });
     });
 
     res.status(200).json({ event: updated });
@@ -182,7 +205,9 @@ eventRouter.delete(
       data: { status: "CANCELLED" },
     });
 
-    await queueCancellationEmails(updated.id);
+    // Background fan-out: the organizer's request doesn't wait for every
+    // attendee's email (it never rejects, so there is nothing to catch).
+    void queueCancellationEmails(updated.id);
 
     res.status(200).json({ event: updated });
   },
@@ -246,9 +271,14 @@ eventRouter.post("/:id/register", requireAuth, async (req, res) => {
     EVENT_LOCK_TX_OPTIONS,
   );
 
-  await queueRegistrationConfirmationEmail(registration.id);
+  const email = await queueRegistrationConfirmationEmail(registration.id);
 
-  res.status(201).json({ registration });
+  // Spec §8.5: the registration stands even if its email couldn't be sent;
+  // say so in a non-blocking `warnings` entry (omitted when all went well).
+  res.status(201).json({
+    registration,
+    ...(email.ok ? {} : { warnings: ["confirmation email may be delayed"] }),
+  });
 });
 
 eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
@@ -260,9 +290,10 @@ eventRouter.delete("/:id/register", requireAuth, async (req, res) => {
     EVENT_LOCK_TX_OPTIONS,
   );
 
-  // Queued after the transaction commits, same as registration (I2 swaps in
-  // the real send). The promoted attendee gets the standard confirmation
-  // email, flagged as a waitlist promotion.
+  // Sent after the transaction commits, same as registration. The promoted
+  // attendee gets the waitlist-promotion email. A failure is dead-lettered
+  // but not reported to the caller: it isn't their email, and the
+  // cancellation itself succeeded.
   if (promoted) {
     await queueRegistrationConfirmationEmail(promoted.id, { promotedFromWaitlist: true });
   }
@@ -311,6 +342,42 @@ eventRouter.get("/:id/registrations", requireAuth, requireOwnerOrAdmin(), async 
 // above, but the whole list in one file, active rows only (no CANCELLED), and
 // never the ticket token. Allowed on cancelled events too — organizers still
 // want the attendee record afterwards.
+// Check-in (spec §7.4): the organizer's (or admin's) in-app scanner posts the
+// ticket token it just read from an attendee's QR code.
+eventRouter.post("/:id/checkin", requireAuth, requireOwnerOrAdmin(), async (req, res) => {
+  const event = req.event!;
+
+  const parsed = checkInSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new ValidationError("Invalid check-in request.", {
+      fields: zodIssuesToFields(parsed.error.issues),
+    });
+  }
+
+  const result = await checkInAttendee(prisma, {
+    event,
+    ticketToken: parsed.data.ticketToken,
+    scannedBy: req.user!.sub,
+  });
+
+  // The cheap audit trail: who scanned whom, without a schema change.
+  logger.info(
+    { eventId: event.id, registrationId: result.registrationId, checkedInBy: req.user!.sub },
+    "Attendee checked in",
+  );
+
+  res.status(200).json({
+    registration: { id: result.registrationId, checkedInAt: result.checkedInAt },
+    attendee: { name: result.attendeeName },
+  });
+});
+
+eventRouter.get("/:id/checkin-stats", requireAuth, requireOwnerOrAdmin(), async (req, res) => {
+  const stats = await getCheckInStats(prisma, req.event!);
+
+  res.status(200).json({ stats });
+});
+
 eventRouter.get(
   "/:id/registrations/export",
   requireAuth,
