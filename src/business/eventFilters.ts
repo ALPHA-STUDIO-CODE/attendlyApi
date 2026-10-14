@@ -10,7 +10,7 @@ export interface EventListFilters {
 }
 
 export function buildEventWhereClause(filters: EventListFilters): Prisma.EventWhereInput {
-  const where: Prisma.EventWhereInput = {};
+  const where: Prisma.EventWhereInput = { deletedAt: null };
 
   if (filters.category) {
     where.categoryId = filters.category;

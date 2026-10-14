@@ -13,6 +13,7 @@ export interface CheckInEvent {
   id: string;
   status: string;
   endTime: Date;
+  deletedAt?: Date | null;
 }
 
 export interface CheckInParams {
@@ -69,7 +70,7 @@ export async function checkInAttendee(
   const { event, ticketToken } = params;
   const now = params.now ?? new Date();
 
-  if (event.status !== "PUBLISHED") {
+  if (event.status !== "PUBLISHED" || event.deletedAt) {
     throw new ConflictError("This event is not open for check-in.", undefined, "EVENT_NOT_OPEN");
   }
   if (now.getTime() > event.endTime.getTime() + CHECKIN_GRACE_MS) {

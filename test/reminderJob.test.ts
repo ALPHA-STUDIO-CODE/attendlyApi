@@ -3,10 +3,6 @@ import { prisma } from "../src/db/prisma";
 import { signTicketToken } from "../src/auth/ticketToken";
 import { runReminderJob } from "../src/jobs/reminderJob";
 
-// Phase K3 against the real database. Only the Resend SDK is mocked, so the
-// real wrapper runs and failed sends really land in the FailedEmail table.
-// Every run is limited to the event under test (`eventId`), so these tests
-// can't claim reminders belonging to other test files.
 const mockSend = jest.fn();
 jest.mock("resend", () => ({
   Resend: jest.fn().mockImplementation(() => ({
@@ -39,9 +35,13 @@ async function createUser(name = "K3 Attendee") {
   });
 }
 
-/** An event that starts `startsInMinutes` from now (negative: already started). */
 async function createEvent(
-  overrides: { startsInMinutes?: number; status?: "PUBLISHED" | "CANCELLED"; title?: string } = {},
+  overrides: {
+    startsInMinutes?: number;
+    status?: "PUBLISHED" | "CANCELLED";
+    title?: string;
+    deletedAt?: Date;
+  } = {},
 ) {
   const organizer = await createUser("K3 Organizer");
   const category = await prisma.category.findFirstOrThrow({ where: { name: "Tech" } });
@@ -61,6 +61,7 @@ async function createEvent(
       endTime: new Date(start.getTime() + 3 * HOUR),
       maxCapacity: 50,
       status: overrides.status ?? "PUBLISHED",
+      deletedAt: overrides.deletedAt ?? null,
     },
   });
 }
@@ -164,6 +165,18 @@ describe("runReminderJob", () => {
 
     expect(mockSend).not.toHaveBeenCalled();
     expect(await isSent(config.id)).toBe(true);
+  });
+
+  it("marks a due reminder sent without emailing when an admin removed the event (Phase L)", async () => {
+    const event = await createEvent({ deletedAt: new Date() });
+    const config = await addReminder(event.id, 1);
+    await addRegistration(event.id, "REGISTERED");
+
+    const summary = await runReminderJob({ eventId: event.id });
+
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(await isSent(config.id)).toBe(true);
+    expect(summary).toMatchObject({ claimed: 1, skipped: 1, sent: 0 });
   });
 
   it("never sends the same reminder twice, however many times it runs", async () => {

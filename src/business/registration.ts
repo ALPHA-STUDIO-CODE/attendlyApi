@@ -15,6 +15,7 @@ interface LockedEventRow {
   maxCapacity: number;
   status: string;
   isLocked: boolean;
+  deletedAt: Date | null;
 }
 
 export async function registerForEvent(
@@ -22,13 +23,13 @@ export async function registerForEvent(
   { eventId, userId }: RegisterForEventParams,
 ): Promise<Registration> {
   const rows = await tx.$queryRaw<LockedEventRow[]>`
-    SELECT "id", "maxCapacity", "status", "isLocked"
+    SELECT "id", "maxCapacity", "status", "isLocked", "deletedAt"
     FROM "Event"
     WHERE "id" = ${eventId}
     FOR UPDATE
   `;
   const event = rows[0];
-  if (!event) {
+  if (!event || event.deletedAt) {
     throw new NotFoundError("Event not found.");
   }
 

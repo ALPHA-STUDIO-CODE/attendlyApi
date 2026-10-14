@@ -10,9 +10,6 @@ import {
 import { AppError } from "../../src/errors";
 import { logger } from "../../src/logger";
 
-// Only the logger is mocked. The database is a hand-rolled stand-in passed in
-// as `db`, and tokens are real signed JWTs, so these tests exercise the
-// actual decision logic (spec §7.4, §8.5).
 jest.mock("../../src/logger", () => ({
   logger: { info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
@@ -26,8 +23,6 @@ const asDb = db as unknown as Prisma.TransactionClient;
 
 const ORIGINAL_ENV = { ...process.env };
 
-// Needed before TOKEN below is signed, i.e. at collection time, earlier than
-// any beforeEach (which re-sets it after each test restores the environment).
 process.env.JWT_TICKET_SECRET = "test-ticket-secret";
 
 const EVENT: CheckInEvent = {
@@ -49,7 +44,6 @@ function stored(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** Runs a check-in and returns the AppError it rejected with. */
 async function rejection(overrides: Partial<Parameters<typeof checkInAttendee>[1]> = {}) {
   try {
     await checkInAttendee(asDb, { event: EVENT, ticketToken: TOKEN, now: DURING, ...overrides });
@@ -108,6 +102,16 @@ describe("checkInAttendee — event state", () => {
       expect(db.registration.updateMany).not.toHaveBeenCalled();
     },
   );
+
+  it("refuses an admin-removed event with 409 EVENT_NOT_OPEN, without touching the database", async () => {
+    const error = await rejection({
+      event: { ...EVENT, deletedAt: new Date("2026-11-05T00:00:00.000Z") },
+    });
+
+    expect(error.statusCode).toBe(409);
+    expect(error.code).toBe("EVENT_NOT_OPEN");
+    expect(db.registration.updateMany).not.toHaveBeenCalled();
+  });
 
   it("refuses once the grace period after the event ends has passed (409 CHECKIN_CLOSED)", async () => {
     const tooLate = new Date(EVENT.endTime.getTime() + CHECKIN_GRACE_MS + 1);

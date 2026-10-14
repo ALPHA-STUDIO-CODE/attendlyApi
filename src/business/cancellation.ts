@@ -8,13 +8,13 @@ export interface CancelRegistrationParams {
 
 export interface CancelRegistrationResult {
   cancelled: Registration;
-  /** The waitlisted registration promoted into the freed seat, if any. */
   promoted: Registration | null;
 }
 
 interface LockedEventRow {
   id: string;
   status: string;
+  deletedAt: Date | null;
 }
 
 interface WaitlistHeadRow {
@@ -22,28 +22,12 @@ interface WaitlistHeadRow {
   waitlistPosition: number | null;
 }
 
-/**
- * Cancels `userId`'s registration for `eventId` (spec §7.2).
- *
- * - Cancelling a REGISTERED row frees a seat: the lowest-`waitlistPosition`
- *   WAITLISTED row is locked (`SELECT ... FOR UPDATE`), promoted to
- *   REGISTERED, and its position cleared.
- * - Cancelling a WAITLISTED row frees no seat, so nothing is promoted.
- * - In both cases waitlist positions stay sequential (1..n): every
- *   WAITLISTED row behind the one that left moves up by one.
- *
- * The Event row is locked first (same as `registerForEvent`), so every
- * registration mutation for an event is serialized. The gap-closing update
- * touches many rows, and without a consistent lock order two concurrent
- * cancellations could deadlock on them. The `FOR UPDATE` on the waitlist head
- * is kept as well, as the spec describes it.
- */
 export async function cancelRegistration(
   tx: Prisma.TransactionClient,
   { eventId, userId }: CancelRegistrationParams,
 ): Promise<CancelRegistrationResult> {
   const eventRows = await tx.$queryRaw<LockedEventRow[]>`
-    SELECT "id", "status"
+    SELECT "id", "status", "deletedAt"
     FROM "Event"
     WHERE "id" = ${eventId}
     FOR UPDATE
@@ -80,8 +64,9 @@ export async function cancelRegistration(
     return { cancelled, promoted: null };
   }
 
-  // Don't fill seats of an event that is no longer open (e.g. CANCELLED).
-  if (event.status !== "PUBLISHED") {
+  // Don't fill seats of an event that is no longer open (e.g. CANCELLED), or
+  // that an admin removed (Phase L): nobody should be told they got a seat.
+  if (event.status !== "PUBLISHED" || event.deletedAt) {
     return { cancelled, promoted: null };
   }
 

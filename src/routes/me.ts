@@ -5,9 +5,6 @@ import { ACTIVE_REGISTRATION_STATUSES } from "../business/registrationListing";
 
 export const meRouter = Router();
 
-// The caller's own registrations. `ticketToken` is included on purpose: it is
-// the caller's own QR payload (spec §7.4) and the client needs it to render
-// the ticket. Organizer-facing listings never expose it.
 const ownRegistrationSelect = {
   id: true,
   eventId: true,
@@ -34,19 +31,21 @@ const ownRegistrationSelect = {
 
 meRouter.get("/registrations", requireAuth, async (req, res) => {
   const userId = req.user!.sub;
-  // One clock reading for both queries, so a row can't land in both lists
-  // (or neither) if an event ends between them.
   const now = new Date();
-  const base = { userId, status: { in: ACTIVE_REGISTRATION_STATUSES } };
+  const base = {
+    userId,
+    status: { in: ACTIVE_REGISTRATION_STATUSES },
+    event: { deletedAt: null },
+  };
 
   const [upcoming, past] = await Promise.all([
     prisma.registration.findMany({
-      where: { ...base, event: { endTime: { gte: now } } },
+      where: { ...base, event: { ...base.event, endTime: { gte: now } } },
       orderBy: [{ event: { startTime: "asc" } }, { createdAt: "asc" }],
       select: ownRegistrationSelect,
     }),
     prisma.registration.findMany({
-      where: { ...base, event: { endTime: { lt: now } } },
+      where: { ...base, event: { ...base.event, endTime: { lt: now } } },
       orderBy: [{ event: { startTime: "desc" } }, { createdAt: "asc" }],
       select: ownRegistrationSelect,
     }),
