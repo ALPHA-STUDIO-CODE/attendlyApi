@@ -1,8 +1,19 @@
 import { buildEventWhereClause } from "../../src/business/eventFilters";
 
 describe("buildEventWhereClause", () => {
-  it("returns an empty where-clause when no filters are given", () => {
-    expect(buildEventWhereClause({})).toEqual({});
+  it("only excludes admin-removed events when no filters are given", () => {
+    expect(buildEventWhereClause({})).toEqual({ deletedAt: null });
+  });
+
+  it("always excludes admin-removed events, whatever other filters are given", () => {
+    const where = buildEventWhereClause({
+      category: "cat-1",
+      city: "x",
+      search: "y",
+      from: "2027-01-01T00:00:00.000Z",
+      upcoming: "true",
+    });
+    expect(where.deletedAt).toBeNull();
   });
 
   it("filters by categoryId when category is given", () => {

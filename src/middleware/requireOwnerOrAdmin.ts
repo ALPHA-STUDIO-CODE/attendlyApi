@@ -13,7 +13,7 @@ export function requireOwnerOrAdmin(options: RequireOwnerOrAdminOptions = {}): R
   return async (req, _res, next) => {
     const eventId = requireStringParam(req, "id");
 
-    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    const event = await prisma.event.findFirst({ where: { id: eventId, deletedAt: null } });
     if (!event) {
       throw new NotFoundError("Event not found.");
     }
