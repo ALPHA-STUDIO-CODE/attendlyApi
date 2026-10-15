@@ -1,9 +1,6 @@
 import { prisma } from "../db/prisma";
 import { generateOpaqueToken, hashOpaqueToken } from "./tokenUtils";
 
-// 7-30 days per spec §5; 30 is chosen for a generous "stay logged in"
-// experience — rotation on every refresh keeps the security cost of the
-// longer end of that range low.
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const REFRESH_TOKEN_COOKIE_NAME = "refreshToken";
@@ -13,18 +10,11 @@ export function getRefreshCookieOptions() {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict" as const,
-    // Scoped to /api/auth rather than the whole site — the browser only
-    // needs to send this cookie to the endpoints that actually read it.
     path: "/api/auth",
     maxAge: REFRESH_TOKEN_TTL_MS,
   };
 }
 
-/**
- * Creates a new refresh token row for a user and returns the raw
- * (unhashed) token to set on the response cookie. Only the hash is
- * persisted.
- */
 export async function issueRefreshToken(userId: string): Promise<string> {
   const rawToken = generateOpaqueToken();
   await prisma.refreshToken.create({
@@ -49,14 +39,6 @@ export class InvalidRefreshTokenError extends Error {
   }
 }
 
-/**
- * Validates a presented refresh token and, if valid, rotates it: the old
- * token is marked revoked and a new one is issued. If the presented token
- * has *already* been revoked (i.e. it was rotated out previously and is
- * now being presented again — a sign of theft/reuse), every active
- * refresh token for that user is revoked and RefreshTokenReuseError is
- * thrown, forcing re-login everywhere per spec §9.
- */
 export async function rotateRefreshToken(
   rawToken: string,
 ): Promise<{ userId: string; newRawToken: string }> {
@@ -101,11 +83,10 @@ export async function revokeAllUserRefreshTokens(userId: string): Promise<void> 
   });
 }
 
-/**
- * Logout: hard-deletes the matching row per spec §5, rather than marking
- * it revoked — unlike rotation, there's no reuse-detection value in
- * keeping a deliberately-logged-out token around.
- */
+export async function deleteAllUserRefreshTokens(userId: string): Promise<void> {
+  await prisma.refreshToken.deleteMany({ where: { userId } });
+}
+
 export async function deleteRefreshToken(rawToken: string): Promise<void> {
   const tokenHash = hashOpaqueToken(rawToken);
   await prisma.refreshToken.deleteMany({ where: { tokenHash } });

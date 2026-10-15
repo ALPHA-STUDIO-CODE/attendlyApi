@@ -6,6 +6,8 @@ import { requireRole } from "../middleware/requireRole";
 import { requireStringParam, firstQueryValue } from "../http/params";
 import { parsePagination } from "../business/pagination";
 import { reportStatusFilterSchema, updateReportSchema } from "../validation/reportSchemas";
+import { USER_SEARCH_MAX_LENGTH, userStatusFilterSchema } from "../validation/userSchemas";
+import { ADMIN_USER_SELECT, reactivateUser, suspendUser } from "../business/userModeration";
 import { zodIssuesToFields } from "../validation/zodHelpers";
 import { logger } from "../logger";
 import { ConflictError, NotFoundError, ValidationError } from "../errors";
@@ -157,4 +159,69 @@ adminRouter.patch("/events/:id/flag", async (req, res) => {
   logger.info({ eventId: id, adminId: req.user!.sub }, "Event flagged by admin");
 
   res.status(200).json({ event });
+});
+
+adminRouter.get("/users", async (req, res) => {
+  const { page, limit } = parsePagination(req.query.page, req.query.limit);
+
+  const where: Prisma.UserWhereInput = {};
+  const rawStatus = firstQueryValue(req.query.status);
+  if (rawStatus !== undefined && rawStatus !== "") {
+    const parsed = userStatusFilterSchema.safeParse(rawStatus);
+    if (!parsed.success) {
+      throw new ValidationError("Invalid user filter.", {
+        fields: { status: "Status must be one of: active, suspended." },
+      });
+    }
+    where.status = parsed.data;
+  }
+
+  const search = firstQueryValue(req.query.search)?.trim();
+  if (search) {
+    if (search.length > USER_SEARCH_MAX_LENGTH) {
+      throw new ValidationError("Invalid user filter.", {
+        fields: { search: `Search must be at most ${USER_SEARCH_MAX_LENGTH} characters.` },
+      });
+    }
+    where.OR = [
+      { name: { contains: search, mode: "insensitive" } },
+      { email: { contains: search, mode: "insensitive" } },
+    ];
+  }
+
+  const [users, total] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      skip: (page - 1) * limit,
+      take: limit,
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+      select: ADMIN_USER_SELECT,
+    }),
+    prisma.user.count({ where }),
+  ]);
+
+  res.status(200).json({
+    users,
+    pagination: { page, limit, total, totalPages: total === 0 ? 0 : Math.ceil(total / limit) },
+  });
+});
+
+adminRouter.patch("/users/:id/suspend", async (req, res) => {
+  const id = requireStringParam(req, "id");
+
+  const user = await suspendUser(prisma, { actorId: req.user!.sub, targetId: id });
+
+  logger.info({ userId: id, adminId: req.user!.sub }, "User suspended by admin");
+
+  res.status(200).json({ user });
+});
+
+adminRouter.patch("/users/:id/reactivate", async (req, res) => {
+  const id = requireStringParam(req, "id");
+
+  const user = await reactivateUser(prisma, id);
+
+  logger.info({ userId: id, adminId: req.user!.sub }, "User reactivated by admin");
+
+  res.status(200).json({ user });
 });
