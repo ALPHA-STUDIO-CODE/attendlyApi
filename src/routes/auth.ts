@@ -7,6 +7,7 @@ import {
   issueRefreshToken,
   rotateRefreshToken,
   deleteRefreshToken,
+  deleteAllUserRefreshTokens,
   getRefreshCookieOptions,
   REFRESH_TOKEN_COOKIE_NAME,
   RefreshTokenReuseError,
@@ -20,7 +21,8 @@ import {
   forgotPasswordSchema,
   resetPasswordSchema,
 } from "../validation/authSchemas";
-import { ValidationError, ConflictError, AuthError, ForbiddenError } from "../errors";
+import { ValidationError, ConflictError, AuthError } from "../errors";
+import { assertAccountActive } from "../auth/accountStatus";
 import { zodIssuesToFields } from "../validation/zodHelpers";
 import { requireAuth } from "../middleware/requireAuth";
 import { toPublicUser } from "../auth/publicUser";
@@ -77,9 +79,7 @@ authRouter.post("/login", async (req, res) => {
     throw new AuthError("Invalid email or password.", undefined, "INVALID_CREDENTIALS");
   }
 
-  if (user.status === "SUSPENDED") {
-    throw new ForbiddenError("Your account has been suspended.", undefined, "ACCOUNT_SUSPENDED");
-  }
+  assertAccountActive(user);
 
   const accessToken = signAccessToken({ sub: user.id, role: user.role });
   const refreshToken = await issueRefreshToken(user.id);
@@ -99,6 +99,12 @@ authRouter.post("/refresh", async (req, res) => {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
       throw new InvalidRefreshTokenError();
+    }
+
+    if (user.status === "SUSPENDED") {
+      await deleteAllUserRefreshTokens(user.id);
+      res.clearCookie(REFRESH_TOKEN_COOKIE_NAME, getRefreshCookieOptions());
+      assertAccountActive(user);
     }
 
     const accessToken = signAccessToken({ sub: user.id, role: user.role });
@@ -202,6 +208,7 @@ authRouter.post("/oauth/google", async (req, res) => {
   }
 
   const user = await findOrCreateOAuthUser(profile, "GOOGLE");
+  assertAccountActive(user);
 
   const accessToken = signAccessToken({ sub: user.id, role: user.role });
   const refreshToken = await issueRefreshToken(user.id);
@@ -225,6 +232,7 @@ authRouter.post("/oauth/github", async (req, res) => {
   }
 
   const user = await findOrCreateOAuthUser(profile, "GITHUB");
+  assertAccountActive(user);
 
   const accessToken = signAccessToken({ sub: user.id, role: user.role });
   const refreshToken = await issueRefreshToken(user.id);
